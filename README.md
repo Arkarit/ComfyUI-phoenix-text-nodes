@@ -6,6 +6,7 @@ Eigenes Node-Pack für ComfyUI.
 
 - **PhoenixTextConcat** — Beispiel-Node, verkettet zwei Strings mit Trennzeichen.
 - **PhoenixRandomCSVTextReplace** — ersetzt fortlaufende Platzhalter ($1, $2, ...) in einem Text durch einen zufällig gewählten Begriff aus einer CSV-Kandidatenliste (eine Zeile pro Platzhalter). Portiert von [comfyui-text-placeholder-randomizer](https://github.com/Arkarit/comfyui-text-placeholder-randomizer), dessen `RandomCSVTextReplace`-Node unabhängig davon weiter existiert.
+- **PhoenixSaveText** — speichert Text mit demselben `filename_prefix`-Schema (inkl. `%date%`-Platzhaltern, Unterordnern) und demselben Auto-Counter wie der eingebaute `Save Image`-Node, z.B. passend zu `AAA/myImage_00001_.png` als `AAA/myImage_00001_.txt`. Damit die Nummern wirklich synchron bleiben, den `images`-Ausgang der Save-Image-Node an den optionalen `images`-Eingang hängen (wird nicht gespeichert, erzwingt nur, dass diese Node danach läuft — sonst würde ComfyUI's Counter je nach Ausführungsreihenfolge um eins verrutschen, da er dateiendungs-unabhängig zählt).
 
 ## Neuen Node hinzufügen
 
