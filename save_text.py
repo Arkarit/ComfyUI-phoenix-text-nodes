@@ -4,13 +4,14 @@ import time
 import folder_paths
 
 
-def _highest_counter(full_output_folder, filename, ext=None):
-    """Highest existing `{filename}_{counter}_...` counter in the folder.
-    ext=None scans every file (Save Image's own counter isn't extension-aware);
-    pass an extension to scan only same-type files. Returns 0 if none found."""
+def get_save_text_path(filename_prefix, output_dir, ext=".txt"):
+    """Same prefix-templating / counter scheme as folder_paths.get_save_image_path,
+    but the counter only considers existing files with `ext`. Standalone use only —
+    for text saved alongside images with guaranteed matching numbers, use
+    PhoenixSaveImageAndText instead, which computes one counter for both files."""
 
     def map_filename(fn):
-        prefix_len = len(filename)
+        prefix_len = len(os.path.basename(filename_prefix))
         prefix = fn[:prefix_len + 1]
         try:
             remainder = fn[prefix_len + 1:]
@@ -20,42 +21,7 @@ def _highest_counter(full_output_folder, filename, ext=None):
             digits = 0
         return digits, prefix
 
-    try:
-        candidates = os.listdir(full_output_folder)
-    except FileNotFoundError:
-        os.makedirs(full_output_folder, exist_ok=True)
-        return 0
-
-    if ext is not None:
-        candidates = [f for f in candidates if f.endswith(ext)]
-
-    try:
-        return max(
-            filter(
-                lambda a: os.path.normcase(a[1][:-1]) == os.path.normcase(filename) and a[1][-1] == "_",
-                map(map_filename, candidates),
-            )
-        )[0]
-    except ValueError:
-        return 0
-
-
-def get_save_text_path(filename_prefix, output_dir, width=0, height=0, sync_with_images=False):
-    """Same prefix-templating scheme as folder_paths.get_save_image_path.
-
-    Counter logic depends on `sync_with_images`:
-    - False (no 'images' input connected): standalone auto-increment, based only
-      on this node's own .txt history — normal Save Image-style behavior.
-    - True ('images' connected, guaranteeing this node runs after Save Image):
-      adopt the highest existing counter in the folder as-is (that's the image
-      just written this run) instead of incrementing past it, so the text
-      lands on the exact same number. Falls back to a fresh increment if that
-      number is already taken by an earlier .txt (e.g. re-running without a
-      paired image, or a leftover file)."""
-
     def compute_vars(text):
-        text = text.replace("%width%", str(width))
-        text = text.replace("%height%", str(height))
         now = time.localtime()
         text = text.replace("%year%", str(now.tm_year))
         text = text.replace("%month%", str(now.tm_mon).zfill(2))
@@ -80,28 +46,32 @@ def get_save_text_path(filename_prefix, output_dir, width=0, height=0, sync_with
             f"\n         output_dir: {output_dir}"
         )
 
-    if sync_with_images:
-        counter = _highest_counter(full_output_folder, filename) or 1
-        while os.path.exists(os.path.join(full_output_folder, f"{filename}_{counter:05}_.txt")):
-            counter += 1
-    else:
-        counter = _highest_counter(full_output_folder, filename, ext=".txt") + 1
-
+    try:
+        candidates = [f for f in os.listdir(full_output_folder) if f.endswith(ext)]
+        counter = max(
+            filter(
+                lambda a: os.path.normcase(a[1][:-1]) == os.path.normcase(filename) and a[1][-1] == "_",
+                map(map_filename, candidates),
+            )
+        )[0] + 1
+    except ValueError:
+        counter = 1
+    except FileNotFoundError:
+        os.makedirs(full_output_folder, exist_ok=True)
+        counter = 1
     return full_output_folder, filename, counter, subfolder, filename_prefix
 
 
 class PhoenixSaveText:
     DESCRIPTION = (
-        "Saves text to the ComfyUI output directory using the same "
-        "filename_prefix templating (%date%, %time%, %width%, %height% "
-        "placeholders, subfolders via a path in the prefix) as the built-in "
-        "Save Image node. Connect the optional 'images' input from your "
-        "Save Image node (not saved, only used to force this node to run "
-        "after it) to make this node adopt that image's exact counter "
-        "instead of keeping its own — so a prefix like 'AAA/myImage' lines "
-        "up as myImage_00023_.txt next to myImage_00023_.png even if only "
-        "some earlier images had a matching text file. Without 'images' "
-        "connected, it auto-increments on its own .txt history instead."
+        "Saves standalone text to the ComfyUI output directory using the "
+        "same filename_prefix templating (%date%, %time% placeholders, "
+        "subfolders via a path in the prefix) and auto-incrementing "
+        "counter scheme as the built-in Save Image node. The counter is "
+        "based only on this node's own .txt history, so it's independent "
+        "of any Save Image node — for text saved alongside images with "
+        "guaranteed matching numbers, use 'Save Image + Text (Phoenix)' "
+        "instead."
     )
     OUTPUT_NODE = True
 
@@ -121,11 +91,6 @@ class PhoenixSaveText:
                     "tooltip": "Same syntax as Save Image's filename_prefix, e.g. 'AAA/myImage' or with %date:yyyy-MM-dd%.",
                 }),
             },
-            "optional": {
-                "images": ("IMAGE", {
-                    "tooltip": "Not saved. Connect your Save Image node's images output here so this node runs after it and adopts its exact counter.",
-                }),
-            },
         }
 
     RETURN_TYPES = ("STRING",)
@@ -133,11 +98,9 @@ class PhoenixSaveText:
     FUNCTION = "save_text"
     CATEGORY = "phoenix/text"
 
-    def save_text(self, text, filename_prefix="ComfyUI", images=None):
-        width = images[0].shape[1] if images is not None else 0
-        height = images[0].shape[0] if images is not None else 0
+    def save_text(self, text, filename_prefix="ComfyUI"):
         full_output_folder, filename, counter, subfolder, _ = get_save_text_path(
-            filename_prefix, self.output_dir, width, height, sync_with_images=images is not None
+            filename_prefix, self.output_dir
         )
         file = f"{filename}_{counter:05}_.txt"
         with open(os.path.join(full_output_folder, file), "w", encoding="utf-8") as f:
