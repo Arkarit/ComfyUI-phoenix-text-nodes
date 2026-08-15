@@ -1,0 +1,13 @@
+[project]
+name = "ComfyUI-phoenix-text-nodes"
+description = "Custom text-utility nodes for ComfyUI."
+version = "0.1.0"
+license = "MIT"
+
+[project.urls]
+Repository = "https://github.com/<your-username>/ComfyUI-phoenix-text-nodes/"
+
+[tool.comfy]
+PublisherId = "phoenix"
+DisplayName = "Phoenix Text Nodes"
+Icon = "🔤"
