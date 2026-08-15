@@ -5,9 +5,18 @@
 @description: Custom text-utility nodes for ComfyUI.
 """
 
-from .nodes import NODE_CLASS_MAPPINGS, NODE_DISPLAY_NAME_MAPPINGS
+from . import nodes
+from . import random_csv_text_replace
 
-__all__ = ["NODE_CLASS_MAPPINGS", "NODE_DISPLAY_NAME_MAPPINGS"]
+NODE_CLASS_MAPPINGS = {
+    **nodes.NODE_CLASS_MAPPINGS,
+    **random_csv_text_replace.NODE_CLASS_MAPPINGS,
+}
+NODE_DISPLAY_NAME_MAPPINGS = {
+    **nodes.NODE_DISPLAY_NAME_MAPPINGS,
+    **random_csv_text_replace.NODE_DISPLAY_NAME_MAPPINGS,
+}
 
-# Uncomment if you add a js/ folder with web extensions:
-# WEB_DIRECTORY = "js"
+WEB_DIRECTORY = "js"
+
+__all__ = ["NODE_CLASS_MAPPINGS", "NODE_DISPLAY_NAME_MAPPINGS", "WEB_DIRECTORY"]
