@@ -11,6 +11,7 @@ Eigenes Node-Pack für ComfyUI.
   - `text` ist optional — unverbunden wird nur das Bild gespeichert, keine `.txt`.
   - `path` (optional) überschreibt `filename_prefix`/Counter komplett: kompletter Pfad ohne Extension, z.B. von einer anderen Instanz dieser Node. Bild wird als `<path>.png` gespeichert, Text (falls angegeben) als `<path>.txt`. Damit auch außerhalb des ComfyUI-Output-Ordners nutzbar (z.B. direkt ins Trainingsdatenset schreiben).
   - `path`-Ausgang liefert exakt das Format, das der `path`-Eingang einer anderen Instanz dieser Node erwartet — zum Verketten mehrerer Save-Nodes auf denselben Pfad.
+- **PhoenixAppendText** — hängt ein festes Textfeld an einen eingehenden String an und gibt das Ergebnis aus.
 
 ## Neuen Node hinzufügen
 
