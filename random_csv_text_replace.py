@@ -2,6 +2,8 @@ import csv
 import io
 import random
 
+UNIQUE_KEYWORD = "_UNIQUE_"
+
 
 class PhoenixRandomCSVTextReplace:
     """Replaces sequential placeholders (search_string + index) in a text
@@ -12,7 +14,15 @@ class PhoenixRandomCSVTextReplace:
     contain a comma. start_index also lets you chain several of these
     nodes to cover a larger range. Same seed + same terms always picks the
     same term. A placeholder whose row is missing or empty is left
-    unchanged."""
+    unchanged.
+
+    Rows are independent by default, so the same term can be picked for
+    more than one placeholder. Set 'unique' to make every row avoid terms
+    already picked by another unique row this run, or mark only specific
+    rows by adding the literal field _UNIQUE_ to that row's CSV — it's
+    stripped out before picking, it isn't itself a candidate. If a unique
+    row's candidates are all already taken, it falls back to picking from
+    the full list rather than leaving the placeholder unresolved."""
 
     DESCRIPTION = (
         "Replaces sequential placeholders (search_string + index, e.g. "
@@ -25,7 +35,13 @@ class PhoenixRandomCSVTextReplace:
         "nodes to cover a larger range, e.g. one node covering $1-$5, a "
         "second with start_index=6 covering $6-$10. Same seed + same "
         "terms always picks the same term. A placeholder whose row is "
-        "missing or empty is left unchanged. Shows the result in a "
+        "missing or empty is left unchanged. Rows are independent by "
+        "default (the same term can come up more than once); enable "
+        "'unique' to forbid that across all rows, or add the literal "
+        "field _UNIQUE_ to only specific CSV rows to opt just those in — "
+        "the keyword itself is removed before picking, not a candidate. "
+        "If a unique row's candidates are all already used, it falls "
+        "back to the full list instead of failing. Shows the result in a "
         "read-only preview widget on the node itself."
     )
     OUTPUT_NODE = True
@@ -52,12 +68,22 @@ class PhoenixRandomCSVTextReplace:
                     "default": 'goose,wizard,astronaut\nmoped,unicycle,tank\n"a forest, at night",downtown,the moon',
                     "tooltip": (
                         "CSV: one row per placeholder, row order = start_index, start_index+1, ... "
-                        "Any number of rows/columns. Quote a field to include a literal comma, e.g. \"a, b\",c."
+                        "Any number of rows/columns. Quote a field to include a literal comma, e.g. \"a, b\",c. "
+                        "Add the field _UNIQUE_ to a row to make just that row avoid terms already picked by "
+                        "another unique row this run (it's removed before picking, not a candidate itself)."
                     ),
                 }),
                 "seed": ("INT", {
                     "default": 0, "min": 0, "max": 0xFFFFFFFFFFFFFFFF,
                     "tooltip": "Controls which term is picked. Same seed + same terms always gives the same result.",
+                }),
+                "unique": ("BOOLEAN", {
+                    "default": False,
+                    "tooltip": (
+                        "If enabled, every row avoids terms already picked by another row this run, so no term "
+                        "is used twice. Off by default (rows are independent, terms can repeat). To make only "
+                        "some rows unique instead of all, leave this off and add _UNIQUE_ to those rows' terms."
+                    ),
                 }),
             },
             "optional": {
@@ -73,15 +99,30 @@ class PhoenixRandomCSVTextReplace:
     FUNCTION = "replace"
     CATEGORY = "phoenix/text"
 
-    def replace(self, text, search_string, start_index, terms, seed, preview=""):
+    def replace(self, text, search_string, start_index, terms, seed, unique=False, preview=""):
         rng = random.Random(seed)
         result = text
+        used = set()
         rows = csv.reader(io.StringIO(terms), skipinitialspace=True)
         for offset, row in enumerate(rows):
-            candidates = [field.strip() for field in row if field.strip()]
-            if candidates:
-                placeholder = f"{search_string}{start_index + offset}"
-                result = result.replace(placeholder, rng.choice(candidates))
+            fields = [field.strip() for field in row if field.strip()]
+            row_unique = unique or UNIQUE_KEYWORD in fields
+            candidates = [f for f in fields if f != UNIQUE_KEYWORD]
+            if not candidates:
+                continue
+
+            pool = candidates
+            if row_unique:
+                remaining = [c for c in candidates if c not in used]
+                if remaining:
+                    pool = remaining
+
+            choice = rng.choice(pool)
+            if row_unique:
+                used.add(choice)
+
+            placeholder = f"{search_string}{start_index + offset}"
+            result = result.replace(placeholder, choice)
         return {"ui": {"text": [result]}, "result": (result,)}
 
 
