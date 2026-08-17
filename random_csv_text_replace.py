@@ -3,6 +3,7 @@ import io
 import random
 
 UNIQUE_KEYWORD = "_UNIQUE_"
+NONE_KEYWORD = "_NONE_"
 
 
 class PhoenixRandomCSVTextReplace:
@@ -22,7 +23,12 @@ class PhoenixRandomCSVTextReplace:
     rows by adding the literal field _UNIQUE_ to that row's CSV — it's
     stripped out before picking, it isn't itself a candidate. If a unique
     row's candidates are all already taken, it falls back to picking from
-    the full list rather than leaving the placeholder unresolved."""
+    the full list rather than leaving the placeholder unresolved.
+
+    A row whose only field is _NONE_ removes its placeholder from the
+    output entirely instead of substituting a term — e.g. row 5
+    containing just _NONE_ deletes $5 rather than leaving "$5" or
+    "_NONE_" behind."""
 
     DESCRIPTION = (
         "Replaces sequential placeholders (search_string + index, e.g. "
@@ -41,7 +47,9 @@ class PhoenixRandomCSVTextReplace:
         "field _UNIQUE_ to only specific CSV rows to opt just those in — "
         "the keyword itself is removed before picking, not a candidate. "
         "If a unique row's candidates are all already used, it falls "
-        "back to the full list instead of failing. Shows the result in a "
+        "back to the full list instead of failing. A row whose only "
+        "field is _NONE_ removes its placeholder from the output "
+        "entirely instead of substituting a term. Shows the result in a "
         "read-only preview widget on the node itself."
     )
     OUTPUT_NODE = True
@@ -70,7 +78,9 @@ class PhoenixRandomCSVTextReplace:
                         "CSV: one row per placeholder, row order = start_index, start_index+1, ... "
                         "Any number of rows/columns. Quote a field to include a literal comma, e.g. \"a, b\",c. "
                         "Add the field _UNIQUE_ to a row to make just that row avoid terms already picked by "
-                        "another unique row this run (it's removed before picking, not a candidate itself)."
+                        "another unique row this run (it's removed before picking, not a candidate itself). "
+                        "A row containing only _NONE_ removes its placeholder from the output instead of "
+                        "substituting a term."
                     ),
                 }),
                 "seed": ("INT", {
@@ -111,15 +121,18 @@ class PhoenixRandomCSVTextReplace:
             if not candidates:
                 continue
 
-            pool = candidates
-            if row_unique:
-                remaining = [c for c in candidates if c not in used]
-                if remaining:
-                    pool = remaining
+            if candidates == [NONE_KEYWORD]:
+                choice = ""
+            else:
+                pool = candidates
+                if row_unique:
+                    remaining = [c for c in candidates if c not in used]
+                    if remaining:
+                        pool = remaining
 
-            choice = rng.choice(pool)
-            if row_unique:
-                used.add(choice)
+                choice = rng.choice(pool)
+                if row_unique:
+                    used.add(choice)
 
             placeholder = f"{search_string}{start_index + offset}"
             result = result.replace(placeholder, choice)

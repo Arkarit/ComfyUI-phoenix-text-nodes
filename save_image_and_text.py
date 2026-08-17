@@ -11,15 +11,18 @@ from comfy.cli_args import args
 
 class PhoenixSaveImageAndText:
     DESCRIPTION = (
-        "Saves images together with an optional matching text file (e.g. a "
-        "caption), using the same filename_prefix templating as the "
-        "built-in Save Image node. Both files are written from a single "
-        "counter computed once per call, so the numbers are always in "
-        "sync (e.g. myImage_00023_.png next to myImage_00023_.txt) "
-        "regardless of how the rest of the graph is wired. Connect 'path' "
-        "to bypass filename_prefix/counter entirely and save at an exact "
-        "location instead — full path, no extension, e.g. this node's own "
-        "'path' output, or a location outside the ComfyUI output folder."
+        "Saves images together with up to two optional matching text "
+        "files (e.g. a caption and a second variant), using the same "
+        "filename_prefix templating as the built-in Save Image node. All "
+        "files are written from a single counter computed once per call, "
+        "so the numbers are always in sync (e.g. myImage_00023_.png next "
+        "to myImage_00023_.txt and myImage_00023_2.txt) regardless of how "
+        "the rest of the graph is wired. text2_postfix controls the "
+        "second text file's suffix before the extension (default '2'). "
+        "Connect 'path' to bypass filename_prefix/counter entirely and "
+        "save at an exact location instead — full path, no extension, "
+        "e.g. this node's own 'path' output, or a location outside the "
+        "ComfyUI output folder."
     )
     OUTPUT_NODE = True
 
@@ -43,6 +46,14 @@ class PhoenixSaveImageAndText:
                     "forceInput": True, "multiline": True,
                     "tooltip": "The text to save alongside each image (e.g. a caption). Leave unconnected to save only the image.",
                 }),
+                "text2": ("STRING", {
+                    "forceInput": True, "multiline": True,
+                    "tooltip": "A second, optional text to save alongside each image (e.g. a second caption variant), using text2_postfix as its filename suffix. Leave unconnected to skip it.",
+                }),
+                "text2_postfix": ("STRING", {
+                    "default": "2",
+                    "tooltip": "Suffix appended to the filename (before the extension) for text2, e.g. myImage_00023_2.txt.",
+                }),
                 "path": ("STRING", {
                     "forceInput": True,
                     "tooltip": "Exact save location: full path without extension (e.g. from another Save Image + Text node's 'path' output). Overrides filename_prefix/counter — the image is saved as '<path>.png', the text (if given) as '<path>.txt'.",
@@ -58,7 +69,7 @@ class PhoenixSaveImageAndText:
     FUNCTION = "save"
     CATEGORY = "phoenix/text"
 
-    def save(self, images, filename_prefix="ComfyUI", text=None, path=None, prompt=None, extra_pnginfo=None):
+    def save(self, images, filename_prefix="ComfyUI", text=None, text2=None, text2_postfix="2", path=None, prompt=None, extra_pnginfo=None):
         results = []
         last_base_path = ""
 
@@ -103,6 +114,9 @@ class PhoenixSaveImageAndText:
             if text is not None:
                 with open(base_path + ".txt", "w", encoding="utf-8") as f:
                     f.write(text)
+            if text2 is not None:
+                with open(base_path + text2_postfix + ".txt", "w", encoding="utf-8") as f:
+                    f.write(text2)
 
             results.append({
                 "filename": base + ".png",
