@@ -1,9 +1,21 @@
 import csv
 import io
 import random
+import re
 
 UNIQUE_KEYWORD = "_UNIQUE_"
 NONE_KEYWORD = "_NONE_"
+WEIGHT_PATTERN = re.compile(r"_(\d+(?:\.\d+)?)_")
+
+
+def _parse_weight(candidate):
+    """Splits a candidate like "_2_ green" into ("green", 2.0). A candidate
+    without a _NUMBER_ token gets weight 1.0."""
+    match = WEIGHT_PATTERN.search(candidate)
+    if not match:
+        return candidate, 1.0
+    text = (candidate[:match.start()] + candidate[match.end():]).strip()
+    return text, float(match.group(1))
 
 
 class PhoenixRandomCSVTextReplace:
@@ -28,7 +40,13 @@ class PhoenixRandomCSVTextReplace:
     A row whose only field is _NONE_ removes its placeholder from the
     output entirely instead of substituting a term — e.g. row 5
     containing just _NONE_ deletes $5 rather than leaving "$5" or
-    "_NONE_" behind."""
+    "_NONE_" behind.
+
+    A candidate may contain a _NUMBER_ token (e.g. "_2_ green") to weight
+    how often it's picked relative to the row's other candidates (default
+    weight 1); the token is stripped from the term before use. E.g. for
+    "red, _2_ green, _0.1_ blue", green comes up twice as often as red,
+    and blue only a tenth as often as red."""
 
     DESCRIPTION = (
         "Replaces sequential placeholders (search_string + index, e.g. "
@@ -49,8 +67,12 @@ class PhoenixRandomCSVTextReplace:
         "If a unique row's candidates are all already used, it falls "
         "back to the full list instead of failing. A row whose only "
         "field is _NONE_ removes its placeholder from the output "
-        "entirely instead of substituting a term. Shows the result in a "
-        "read-only preview widget on the node itself."
+        "entirely instead of substituting a term. A candidate may "
+        "contain a _NUMBER_ token (e.g. \"_2_ green\") to weight how "
+        "often it's picked relative to the row's other candidates "
+        "(default weight 1); the token is stripped from the term before "
+        "use. Shows the result in a read-only preview widget on the "
+        "node itself."
     )
     OUTPUT_NODE = True
 
@@ -80,7 +102,9 @@ class PhoenixRandomCSVTextReplace:
                         "Add the field _UNIQUE_ to a row to make just that row avoid terms already picked by "
                         "another unique row this run (it's removed before picking, not a candidate itself). "
                         "A row containing only _NONE_ removes its placeholder from the output instead of "
-                        "substituting a term."
+                        "substituting a term. Add a _NUMBER_ token to a candidate, e.g. \"_2_ green\", to "
+                        "weight how often it's picked relative to the row's other candidates (default 1); "
+                        "the token is stripped from the term before use."
                     ),
                 }),
                 "seed": ("INT", {
@@ -124,13 +148,14 @@ class PhoenixRandomCSVTextReplace:
             if candidates == [NONE_KEYWORD]:
                 choice = ""
             else:
-                pool = candidates
+                weighted = [_parse_weight(c) for c in candidates]
+                pool = weighted
                 if row_unique:
-                    remaining = [c for c in candidates if c not in used]
+                    remaining = [(t, w) for t, w in weighted if t not in used]
                     if remaining:
                         pool = remaining
 
-                choice = rng.choice(pool)
+                choice = rng.choices([t for t, _ in pool], weights=[w for _, w in pool], k=1)[0]
                 if row_unique:
                     used.add(choice)
 
