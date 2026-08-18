@@ -23,7 +23,8 @@ class PhoenixLoadText:
         "seed), 0 = first match, N>0 = the match at that position (1 = "
         "second match, 2 = third, ...). If no file is found (empty "
         "path, no match, index out of range, unreadable file), the text "
-        "output is empty and the preview widget explains why."
+        "output falls back to alternative_text, loaded is False, and the "
+        "preview widget explains why."
     )
     OUTPUT_NODE = True
 
@@ -49,6 +50,10 @@ class PhoenixLoadText:
                 }),
             },
             "optional": {
+                "alternative_text": ("STRING", {
+                    "multiline": True, "default": "",
+                    "tooltip": "Output when no file could be loaded, instead of an empty string.",
+                }),
                 "preview": ("STRING", {
                     "multiline": True, "default": "",
                     "tooltip": "Read-only preview of the loaded text, or the reason none was found. Not an input; updates after each run.",
@@ -56,44 +61,44 @@ class PhoenixLoadText:
             },
         }
 
-    RETURN_TYPES = ("STRING",)
-    RETURN_NAMES = ("text",)
+    RETURN_TYPES = ("STRING", "BOOLEAN")
+    RETURN_NAMES = ("text", "loaded")
     FUNCTION = "load"
     CATEGORY = "phoenix/text"
 
-    def load(self, path, index, seed, preview=""):
-        text, message = self._load_text(path, index, seed)
-        return {"ui": {"text": [message]}, "result": (text,)}
+    def load(self, path, index, seed, alternative_text="", preview=""):
+        text, message, loaded = self._load_text(path, index, seed, alternative_text)
+        return {"ui": {"text": [message]}, "result": (text, loaded)}
 
-    def _load_text(self, path, index, seed):
+    def _load_text(self, path, index, seed, alternative_text):
         path = (path or "").strip()
         if not path:
-            return "", "No Text found: no path specified."
+            return alternative_text, "No Text found: no path specified. Using alternative text.", False
 
         matches = sorted(
             m for m in glob.glob(_resolve_pattern(path), recursive=True)
             if os.path.isfile(m)
         )
         if not matches:
-            return "", f"No Text found: no files matched pattern '{path}'."
+            return alternative_text, f"No Text found: no files matched pattern '{path}'. Using alternative text.", False
 
         if index == -1:
             chosen = random.Random(seed).choice(matches)
         elif index < len(matches):
             chosen = matches[index]
         else:
-            return "", (
+            return alternative_text, (
                 f"No Text found: index {index} out of range "
-                f"(only {len(matches)} file(s) matched '{path}')."
-            )
+                f"(only {len(matches)} file(s) matched '{path}'). Using alternative text."
+            ), False
 
         try:
             with open(chosen, "r", encoding="utf-8") as f:
                 content = f.read()
         except OSError as e:
-            return "", f"No Text found: failed to read '{chosen}': {e}"
+            return alternative_text, f"No Text found: failed to read '{chosen}': {e}. Using alternative text.", False
 
-        return content, content
+        return content, content, True
 
 
 NODE_CLASS_MAPPINGS = {

@@ -19,7 +19,9 @@ Custom node pack for ComfyUI.
 - **PhoenixLoadText** — loads a `.txt` file via a path with wildcards (`*`, `?`, `[seq]`, `**` for recursive), e.g. `input/random/random*.txt`. Relative paths are resolved against the ComfyUI root; matches are sorted alphabetically.
   - `index`: `-1` = pick a random match (via `seed`), `0` = take the first match, `>0` = the match at this position (`1` = second match, ...).
   - `seed` + `control_after_generate`: same as KSampler — only used when `index = -1`.
-  - `preview`: read-only widget showing the loaded text, or "No Text found" plus a reason when there's no match (no path, no match, index out of range, file not readable). In that case, the `text` output is empty.
+  - `alternative_text` (optional, default empty) — output used for `text` when no file could be loaded, instead of an empty string.
+  - `loaded` (bool output) — `true` if the text came from a file, `false` if `alternative_text` was used instead.
+  - `preview`: read-only widget showing the loaded text, or "No Text found" plus a reason when there's no match (no path, no match, index out of range, file not readable), noting that the alternative text was used.
 
 ## Adding a new node
 
