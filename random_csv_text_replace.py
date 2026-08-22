@@ -3,25 +3,98 @@ import io
 import random
 import re
 
+import server
+from aiohttp import web
+
 UNIQUE_KEYWORD = "_UNIQUE_"
 NONE_KEYWORD = "_NONE_"
 WEIGHT_PATTERN = re.compile(r"_(\d+(?:\.\d+)?)_")
+NODE_TAG_PATTERN = re.compile(r"_NODE\(([^)]*)\)_")
 
 
-def _parse_weight(candidate):
-    """Splits a candidate like "_2_ green" into ("green", 2.0). A candidate
-    without a _NUMBER_ token gets weight 1.0. A weight token placed before a
+def _parse_candidate(candidate):
+    """Splits a candidate like "_NODE(A)_ _2_ green" into its display text
+    "green", its weight 2.0 (default 1.0 without a _NUMBER_ token), and the
+    node names tagged on it, e.g. ["A"] (a candidate can carry any number
+    of _NODE(name)_ tags, or none). A weight or node tag placed before a
     quoted field (e.g. _100_ "") defeats CSV's own quote parsing, since a
     quote is only special at the very start of a field, so the leftover
     text is unquoted here instead, letting _100_ "" mean an empty string
     with weight 100 rather than the literal two-character text ""."""
-    match = WEIGHT_PATTERN.search(candidate)
-    if not match:
-        return candidate, 1.0
-    text = (candidate[:match.start()] + candidate[match.end():]).strip()
+    node_names = [name.strip() for name in NODE_TAG_PATTERN.findall(candidate) if name.strip()]
+    text = NODE_TAG_PATTERN.sub("", candidate)
+    match = WEIGHT_PATTERN.search(text)
+    if match:
+        text = text[:match.start()] + text[match.end():]
+        weight = float(match.group(1))
+    else:
+        weight = 1.0
+    text = text.strip()
     if len(text) >= 2 and text[0] == '"' and text[-1] == '"':
         text = text[1:-1]
-    return text, float(match.group(1))
+    return text, weight, node_names
+
+
+def _process_rows(terms, seed, unique):
+    """Parses terms and picks one candidate per row exactly like
+    PhoenixRandomCSVTextReplace.replace() does, for rows that have
+    candidates. Returns a list of per-row dicts: 'text' (the picked
+    term), 'node_names' (the picked candidate's _NODE(...)_ tags), and
+    'universe' (every node name tagged anywhere in that row, picked or
+    not) — used both by replace() and by the /phoenix/random_csv_node_toggles
+    endpoint that resolves node bypass state before a prompt is queued."""
+    rng = random.Random(seed)
+    used = set()
+    rows_out = []
+    for row in csv.reader(io.StringIO(terms), skipinitialspace=True):
+        fields = [field.strip() for field in row if field.strip()]
+        row_unique = unique or UNIQUE_KEYWORD in fields
+        candidates = [f for f in fields if f != UNIQUE_KEYWORD]
+        if not candidates:
+            continue
+
+        parsed = [_parse_candidate(c) for c in candidates]
+        universe = sorted({name for _, _, names in parsed for name in names})
+
+        if candidates == [NONE_KEYWORD]:
+            choice_text, choice_names = "", []
+        else:
+            pool = parsed
+            if row_unique:
+                remaining = [p for p in parsed if p[0] not in used]
+                if remaining:
+                    pool = remaining
+            choice_text, _, choice_names = rng.choices(pool, weights=[w for _, w, _ in pool], k=1)[0]
+            if row_unique:
+                used.add(choice_text)
+
+        rows_out.append({"text": choice_text, "node_names": choice_names, "universe": universe})
+    return rows_out
+
+
+def _resolve_node_toggles(terms, seed, unique):
+    """Resolves which _NODE(name)_-tagged nodes should be active vs.
+    bypassed for a run: a name is active if the row's picked candidate
+    carries its tag, bypassed if the row merely mentions it elsewhere.
+    Rows are applied in order, so a name mentioned in more than one row
+    takes its state from the last row that mentions it."""
+    state = {}
+    for row in _process_rows(terms, seed, unique):
+        chosen = set(row["node_names"])
+        for name in row["universe"]:
+            state[name] = name in chosen
+    return state
+
+
+@server.PromptServer.instance.routes.post("/phoenix/random_csv_node_toggles")
+async def _random_csv_node_toggles_route(request):
+    data = await request.json()
+    state = _resolve_node_toggles(
+        data.get("terms", ""),
+        int(data.get("seed", 0)),
+        bool(data.get("unique", False)),
+    )
+    return web.json_response(state)
 
 
 class PhoenixRandomCSVTextReplace:
@@ -52,7 +125,20 @@ class PhoenixRandomCSVTextReplace:
     how often it's picked relative to the row's other candidates (default
     weight 1); the token is stripped from the term before use. E.g. for
     "red, _2_ green, _0.1_ blue", green comes up twice as often as red,
-    and blue only a tenth as often as red."""
+    and blue only a tenth as often as red.
+
+    A candidate may also carry any number of _NODE(nodename)_ tags (e.g.
+    "_NODE(A)_ _NODE(B)_ red"), where nodename is the title of another
+    node in the graph. Before a prompt is queued, a companion JS
+    extension resolves, for every row, which node names are tagged on
+    the candidate that would be picked with the current seed: those are
+    set active, and every other node name tagged anywhere else in that
+    same row is set to bypass. A name mentioned in more than one row
+    takes its state from the last such row. This only takes effect at
+    queue time (via a *_node_toggle.js companion script hitting the
+    /phoenix/random_csv_node_toggles endpoint), not during this node's
+    own execution, since node bypass state is fixed before a prompt
+    starts running."""
 
     DESCRIPTION = (
         "Replaces sequential placeholders (search_string + index, e.g. "
@@ -77,9 +163,15 @@ class PhoenixRandomCSVTextReplace:
         "contain a _NUMBER_ token (e.g. \"_2_ green\") to weight how "
         "often it's picked relative to the row's other candidates "
         "(default weight 1); the token is stripped from the term before "
-        "use. Shows the result in a read-only preview widget on the "
-        "node itself. Also outputs replaced_text: just the picked term "
-        "for each processed row, one per line in row order (rows with a "
+        "use. A candidate may also carry any number of _NODE(nodename)_ "
+        "tags naming another node in the graph by title; at queue time "
+        "(not during this node's own execution) a companion JS extension "
+        "activates the node names tagged on each row's picked candidate "
+        "and bypasses every other node name mentioned elsewhere in that "
+        "row, with the last row mentioning a given name winning. Shows "
+        "the result in a read-only preview widget on the node itself. "
+        "Also outputs replaced_text: just the picked term for each "
+        "processed row, one per line in row order (rows with a "
         "missing/empty CSV line are skipped, _NONE_ rows contribute an "
         "empty line)."
     )
@@ -113,7 +205,10 @@ class PhoenixRandomCSVTextReplace:
                         "A row containing only _NONE_ removes its placeholder from the output instead of "
                         "substituting a term. Add a _NUMBER_ token to a candidate, e.g. \"_2_ green\", to "
                         "weight how often it's picked relative to the row's other candidates (default 1); "
-                        "the token is stripped from the term before use."
+                        "the token is stripped from the term before use. Add any number of _NODE(nodename)_ "
+                        "tags to a candidate to name other nodes (by title) to activate when it's picked; "
+                        "at queue time every other node name mentioned elsewhere in that row is bypassed "
+                        "instead (last row mentioning a name wins)."
                     ),
                 }),
                 "seed": ("INT", {
@@ -143,35 +238,12 @@ class PhoenixRandomCSVTextReplace:
     CATEGORY = "phoenix/text"
 
     def replace(self, text, search_string, start_index, terms, seed, unique=False, preview=""):
-        rng = random.Random(seed)
         result = text
-        used = set()
         replaced = []
-        rows = csv.reader(io.StringIO(terms), skipinitialspace=True)
-        for offset, row in enumerate(rows):
-            fields = [field.strip() for field in row if field.strip()]
-            row_unique = unique or UNIQUE_KEYWORD in fields
-            candidates = [f for f in fields if f != UNIQUE_KEYWORD]
-            if not candidates:
-                continue
-
-            if candidates == [NONE_KEYWORD]:
-                choice = ""
-            else:
-                weighted = [_parse_weight(c) for c in candidates]
-                pool = weighted
-                if row_unique:
-                    remaining = [(t, w) for t, w in weighted if t not in used]
-                    if remaining:
-                        pool = remaining
-
-                choice = rng.choices([t for t, _ in pool], weights=[w for _, w in pool], k=1)[0]
-                if row_unique:
-                    used.add(choice)
-
-            replaced.append(choice)
+        for offset, row in enumerate(_process_rows(terms, seed, unique)):
+            replaced.append(row["text"])
             placeholder = f"{search_string}{start_index + offset}"
-            result = result.replace(placeholder, choice)
+            result = result.replace(placeholder, row["text"])
         replaced_text = "\n".join(replaced)
         return {"ui": {"text": [result]}, "result": (result, replaced_text)}
 
