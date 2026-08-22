@@ -10,11 +10,17 @@ WEIGHT_PATTERN = re.compile(r"_(\d+(?:\.\d+)?)_")
 
 def _parse_weight(candidate):
     """Splits a candidate like "_2_ green" into ("green", 2.0). A candidate
-    without a _NUMBER_ token gets weight 1.0."""
+    without a _NUMBER_ token gets weight 1.0. A weight token placed before a
+    quoted field (e.g. _100_ "") defeats CSV's own quote parsing, since a
+    quote is only special at the very start of a field, so the leftover
+    text is unquoted here instead, letting _100_ "" mean an empty string
+    with weight 100 rather than the literal two-character text ""."""
     match = WEIGHT_PATTERN.search(candidate)
     if not match:
         return candidate, 1.0
     text = (candidate[:match.start()] + candidate[match.end():]).strip()
+    if len(text) >= 2 and text[0] == '"' and text[-1] == '"':
+        text = text[1:-1]
     return text, float(match.group(1))
 
 
