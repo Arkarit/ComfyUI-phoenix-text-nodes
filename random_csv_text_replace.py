@@ -78,7 +78,10 @@ class PhoenixRandomCSVTextReplace:
         "often it's picked relative to the row's other candidates "
         "(default weight 1); the token is stripped from the term before "
         "use. Shows the result in a read-only preview widget on the "
-        "node itself."
+        "node itself. Also outputs replaced_text: just the picked term "
+        "for each processed row, one per line in row order (rows with a "
+        "missing/empty CSV line are skipped, _NONE_ rows contribute an "
+        "empty line)."
     )
     OUTPUT_NODE = True
 
@@ -134,8 +137,8 @@ class PhoenixRandomCSVTextReplace:
             },
         }
 
-    RETURN_TYPES = ("STRING",)
-    RETURN_NAMES = ("text",)
+    RETURN_TYPES = ("STRING", "STRING")
+    RETURN_NAMES = ("text", "replaced_text")
     FUNCTION = "replace"
     CATEGORY = "phoenix/text"
 
@@ -143,6 +146,7 @@ class PhoenixRandomCSVTextReplace:
         rng = random.Random(seed)
         result = text
         used = set()
+        replaced = []
         rows = csv.reader(io.StringIO(terms), skipinitialspace=True)
         for offset, row in enumerate(rows):
             fields = [field.strip() for field in row if field.strip()]
@@ -165,9 +169,11 @@ class PhoenixRandomCSVTextReplace:
                 if row_unique:
                     used.add(choice)
 
+            replaced.append(choice)
             placeholder = f"{search_string}{start_index + offset}"
             result = result.replace(placeholder, choice)
-        return {"ui": {"text": [result]}, "result": (result,)}
+        replaced_text = "\n".join(replaced)
+        return {"ui": {"text": [result]}, "result": (result, replaced_text)}
 
 
 NODE_CLASS_MAPPINGS = {
