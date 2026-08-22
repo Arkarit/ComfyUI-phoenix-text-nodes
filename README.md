@@ -19,6 +19,7 @@ Custom node pack for ComfyUI.
   - `path` (optional) completely overrides `filename_prefix`/counter: a full path without extension, e.g. from another instance of this node. The image is saved as `<path>.png`, `text` (if given) as `<path>.txt`, `text2` (if given) as `<path><text2_postfix>.txt`. This makes it usable outside the ComfyUI output folder too (e.g. writing directly into a training dataset).
   - The `path` output produces exactly the format expected by another instance of this node's `path` input — for chaining multiple Save nodes onto the same path.
 - **PhoenixAppendText** — appends a fixed text field to an incoming string and outputs the result.
+- **PhoenixPrependText** — prepends a fixed text field to an incoming string and outputs the result.
 - **PhoenixLoadText** — loads a `.txt` file via a path with wildcards (`*`, `?`, `[seq]`, `**` for recursive), e.g. `input/random/random*.txt`. Relative paths are resolved against the ComfyUI root; matches are sorted alphabetically.
   - `index`: `-1` = pick a random match (via `seed`), `0` = take the first match, `>0` = the match at this position (`1` = second match, ...).
   - `seed` + `control_after_generate`: same as KSampler — only used when `index = -1`.
