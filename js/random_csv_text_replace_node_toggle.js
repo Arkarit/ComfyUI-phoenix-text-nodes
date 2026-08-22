@@ -17,12 +17,61 @@ const NODE_TYPE = "PhoenixRandomCSVTextReplace";
 const MODE_ALWAYS = 0;
 const MODE_BYPASS = 4;
 
+function isVirtualNode(node) {
+	return !!node?.isVirtualNode;
+}
+
+// Widget-to-input conversions can be fed through virtual pass-through
+// nodes (e.g. KJNodes' GetNode/SetNode pair, used for wiring a value like
+// a shared seed across a graph without a drawn link). Those nodes carry
+// no real value themselves; each overrides getInputLink() to hand back
+// the link one hop further up the real chain (GetNode resolves to its
+// named SetNode's own input link). Walking that chain here mirrors what
+// ComfyUI's own prompt serialization does to skip virtual nodes.
+function resolveRealOrigin(node, slotIndex) {
+	let link = node.graph?.links?.[node.inputs?.[slotIndex]?.link];
+	for (let hops = 0; hops < 20 && link; hops++) {
+		const originNode = node.graph?.getNodeById?.(link.origin_id);
+		if (!originNode) {
+			return null;
+		}
+		if (!isVirtualNode(originNode)) {
+			return { node: originNode, slot: link.origin_slot };
+		}
+		if (typeof originNode.getInputLink !== "function") {
+			return null;
+		}
+		link = originNode.getInputLink(link.origin_slot);
+	}
+	return null;
+}
+
 function widgetValue(node, name) {
-	const input = node.inputs?.find((i) => i.name === name);
-	if (input?.link != null) {
+	const slotIndex = node.inputs?.findIndex((i) => i.name === name);
+	if (slotIndex == null || slotIndex < 0 || node.inputs[slotIndex].link == null) {
+		return node.widgets?.find((w) => w.name === name)?.value;
+	}
+	const origin = resolveRealOrigin(node, slotIndex);
+	if (!origin) {
 		return undefined;
 	}
-	return node.widgets?.find((w) => w.name === name)?.value;
+	const namedWidget = origin.node.widgets?.find((w) => w.name === name);
+	if (namedWidget) {
+		return namedWidget.value;
+	}
+	// Common case for primitive/passthrough nodes: a single widget holding
+	// the value, just not named the same as the input it's feeding. A
+	// primitive's own "control_after_generate"-style combo widget (e.g.
+	// PrimitiveInt's "fixed"/"increment"/"decrement"/"randomize" companion)
+	// doesn't carry the value itself, so it's excluded before counting.
+	const CONTROL_AFTER_GENERATE_VALUES = new Set(["fixed", "increment", "decrement", "randomize"]);
+	const candidates = (origin.node.widgets || []).filter(
+		(w) => !(w.type === "combo" && CONTROL_AFTER_GENERATE_VALUES.has(w.value))
+	);
+	if (candidates.length === 1) {
+		return candidates[0].value;
+	}
+	return undefined;
 }
 
 async function resolveToggles(node) {
@@ -34,7 +83,7 @@ async function resolveToggles(node) {
 	const unique = widgetValue(node, "unique");
 	if (seed === undefined || unique === undefined) {
 		console.warn(
-			`Phoenix Random CSV Text Replace "${node.title}": seed/unique is link-driven, can't resolve _NODE(...) tags before queuing.`
+			`Phoenix Random CSV Text Replace "${node.title}": couldn't resolve a concrete seed/unique value ahead of queuing (linked from something other than a plain widget or a single-widget passthrough node), can't resolve _NODE(...) tags before queuing.`
 		);
 		return null;
 	}
