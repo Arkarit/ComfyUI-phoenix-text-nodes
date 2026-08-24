@@ -1,5 +1,3 @@
-import csv
-import io
 import random
 import re
 
@@ -10,17 +8,59 @@ UNIQUE_KEYWORD = "_UNIQUE_"
 NONE_KEYWORD = "_NONE_"
 WEIGHT_PATTERN = re.compile(r"_(\d+(?:\.\d+)?)_")
 NODE_TAG_PATTERN = re.compile(r"_NODE\(([^)]*)\)_")
+TAG_PREFIX_PATTERN = re.compile(
+    r"^\s*(?:(?:_\d+(?:\.\d+)?_|_NODE\([^)]*\)_)\s*)*$"
+)
+
+
+def _split_csv_row(line):
+    """A CSV-row splitter like csv.reader, except a quote is recognized as
+    opening a quoted field even when preceded by whitespace and/or weight
+    (_2_) / _NODE(name)_ tags, e.g. _2_ _NODE(Real)_ "oily, dark". Python's
+    csv module only treats a quote as special at the very start of a
+    field, so a tag placed before a quoted field containing a comma would
+    otherwise cause csv to split the field in the wrong place."""
+    fields = []
+    buf = []
+    in_quotes = False
+    i = 0
+    n = len(line)
+    while i < n:
+        ch = line[i]
+        if in_quotes:
+            if ch == '"':
+                if i + 1 < n and line[i + 1] == '"':
+                    buf.append('"')
+                    i += 2
+                    continue
+                in_quotes = False
+                i += 1
+                continue
+            buf.append(ch)
+            i += 1
+            continue
+        if ch == ',':
+            fields.append("".join(buf))
+            buf = []
+            i += 1
+            continue
+        if ch == '"' and TAG_PREFIX_PATTERN.match("".join(buf)):
+            in_quotes = True
+            i += 1
+            continue
+        buf.append(ch)
+        i += 1
+    fields.append("".join(buf))
+    return fields
 
 
 def _parse_candidate(candidate):
     """Splits a candidate like "_NODE(A)_ _2_ green" into its display text
     "green", its weight 2.0 (default 1.0 without a _NUMBER_ token), and the
     node names tagged on it, e.g. ["A"] (a candidate can carry any number
-    of _NODE(name)_ tags, or none). A weight or node tag placed before a
-    quoted field (e.g. _100_ "") defeats CSV's own quote parsing, since a
-    quote is only special at the very start of a field, so the leftover
-    text is unquoted here instead, letting _100_ "" mean an empty string
-    with weight 100 rather than the literal two-character text ""."""
+    of _NODE(name)_ tags, or none). Quotes around the display text are
+    already stripped by _split_csv_row, so the quote-stripping below is
+    just a defensive fallback."""
     node_names = [name.strip() for name in NODE_TAG_PATTERN.findall(candidate) if name.strip()]
     text = NODE_TAG_PATTERN.sub("", candidate)
     match = WEIGHT_PATTERN.search(text)
@@ -46,7 +86,7 @@ def _process_rows(terms, seed, unique):
     rng = random.Random(seed)
     used = set()
     rows_out = []
-    for row in csv.reader(io.StringIO(terms), skipinitialspace=True):
+    for row in (_split_csv_row(line) for line in terms.splitlines()):
         fields = [field.strip() for field in row if field.strip()]
         row_unique = unique or UNIQUE_KEYWORD in fields
         candidates = [f for f in fields if f != UNIQUE_KEYWORD]
