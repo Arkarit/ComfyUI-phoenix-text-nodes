@@ -82,7 +82,15 @@ def _process_rows(terms, seed, unique):
     term), 'node_names' (the picked candidate's _NODE(...)_ tags), and
     'universe' (every node name tagged anywhere in that row, picked or
     not) — used both by replace() and by the /phoenix/random_csv_node_toggles
-    endpoint that resolves node bypass state before a prompt is queued."""
+    endpoint that resolves node bypass state before a prompt is queued.
+
+    A blank (or whitespace-only) line is skipped entirely rather than
+    contributing an empty entry, so it does NOT reserve a slot for its
+    own placeholder — every following line shifts up by one placeholder
+    index instead. E.g. with 3 lines where line 2 is blank, line 3 is
+    mapped to $2 (not $3), and $3 is left in the text untouched. Only a
+    blank line at the very end is harmless, since it behaves the same as
+    simply having one row fewer than there are placeholders."""
     rng = random.Random(seed)
     used = set()
     rows_out = []
@@ -145,8 +153,11 @@ class PhoenixRandomCSVTextReplace:
     number of placeholders is supported, and quoted fields let a candidate
     contain a comma. start_index also lets you chain several of these
     nodes to cover a larger range. Same seed + same terms always picks the
-    same term. A placeholder whose row is missing or empty is left
-    unchanged.
+    same term. A placeholder past the last CSV row is left unchanged.
+    Note that a blank line is NOT a no-op placeholder-preserving row: it
+    is skipped entirely, so every row after it shifts up by one
+    placeholder index (e.g. a blank line 2 makes line 3 map to $2, not
+    $3) — only a blank line at the very end is harmless.
 
     Rows are independent by default, so the same term can be picked for
     more than one placeholder. Set 'unique' to make every row avoid terms
@@ -190,8 +201,11 @@ class PhoenixRandomCSVTextReplace:
         "supported. start_index also lets you chain several of these "
         "nodes to cover a larger range, e.g. one node covering $1-$5, a "
         "second with start_index=6 covering $6-$10. Same seed + same "
-        "terms always picks the same term. A placeholder whose row is "
-        "missing or empty is left unchanged. Rows are independent by "
+        "terms always picks the same term. A placeholder past the last "
+        "CSV row is left unchanged; a blank line, though, is skipped "
+        "entirely rather than preserving its own placeholder, so every "
+        "row after it shifts up by one index — only a trailing blank "
+        "line is harmless. Rows are independent by "
         "default (the same term can come up more than once); enable "
         "'unique' to forbid that across all rows, or add the literal "
         "field _UNIQUE_ to only specific CSV rows to opt just those in — "
@@ -240,6 +254,9 @@ class PhoenixRandomCSVTextReplace:
                     "tooltip": (
                         "CSV: one row per placeholder, row order = start_index, start_index+1, ... "
                         "Any number of rows/columns. Quote a field to include a literal comma, e.g. \"a, b\",c. "
+                        "A blank line is skipped entirely, not treated as an empty row, so every row below it "
+                        "shifts up by one placeholder index instead of leaving its own placeholder unchanged — "
+                        "avoid blank lines except at the very end. "
                         "Add the field _UNIQUE_ to a row to make just that row avoid terms already picked by "
                         "another unique row this run (it's removed before picking, not a candidate itself). "
                         "A row containing only _NONE_ removes its placeholder from the output instead of "
