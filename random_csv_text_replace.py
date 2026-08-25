@@ -19,18 +19,19 @@ CHANCE_PLACEHOLDER_PATTERN = re.compile("[ \\t]*\x00CH(\\d+)\x00")
 
 def _scan_chance_block(text, start):
     """text[start:] must begin with _CHANCE(. Scans forward parsing
-    whitespace-separated "WEIGHT "quoted text"" pairs (any number of
-    them, no separator needed between pairs since each pair is
-    self-delimiting) until the terminating )_. A doubled quote ("")
-    inside a quoted option escapes a literal quote, matching
-    _split_csv_row's own convention, so an option's text may contain
-    commas, parens, anything except an unescaped quote. Returns
-    (end_index, pairs) where end_index is the index just past the
-    closing )_ and pairs is a list of (weight: float, text: str)
-    tuples, in source order. Malformed input (a stray character where a
-    number/quote was expected, or a block that's never closed) simply
-    stops parsing at that point rather than raising, returning
-    whatever end_index/pairs were reached so far."""
+    whitespace-separated "WEIGHT text" pairs (any number of them, no
+    separator needed between pairs since each pair is self-delimiting)
+    until the terminating )_. An option's text is either a quoted
+    string (needed if it contains whitespace, a comma, or a paren) — a
+    doubled quote ("") inside it escapes a literal quote, matching
+    _split_csv_row's own convention — or, for a plain single word, just
+    the word itself with no quotes at all, e.g. _CHANCE(0.2 happy 0.3
+    sad)_. Returns (end_index, pairs) where end_index is the index just
+    past the closing )_ and pairs is a list of (weight: float, text:
+    str) tuples, in source order. Malformed input (a stray character
+    where a number was expected, or a block that's never closed) simply
+    stops parsing at that point rather than raising, returning whatever
+    end_index/pairs were reached so far."""
     n = len(text)
     i = start + len(CHANCE_OPEN)
     pairs = []
@@ -46,26 +47,33 @@ def _scan_chance_block(text, start):
         i = match.end()
         while i < n and text[i].isspace():
             i += 1
-        if i >= n or text[i] != '"':
-            return i, pairs
-        i += 1
-        buf = []
-        closed = False
-        while i < n:
-            c = text[i]
-            if c == '"':
-                if i + 1 < n and text[i + 1] == '"':
-                    buf.append('"')
-                    i += 2
-                    continue
-                i += 1
-                closed = True
-                break
-            buf.append(c)
+        if i < n and text[i] == '"':
             i += 1
-        if not closed:
-            return i, pairs
-        pairs.append((weight, "".join(buf)))
+            buf = []
+            closed = False
+            while i < n:
+                c = text[i]
+                if c == '"':
+                    if i + 1 < n and text[i + 1] == '"':
+                        buf.append('"')
+                        i += 2
+                        continue
+                    i += 1
+                    closed = True
+                    break
+                buf.append(c)
+                i += 1
+            if not closed:
+                return i, pairs
+            pairs.append((weight, "".join(buf)))
+        else:
+            j = i
+            while j < n and not text[j].isspace() and text[j] != ')':
+                j += 1
+            if j == i:
+                return i, pairs
+            pairs.append((weight, text[i:j]))
+            i = j
     return i, pairs
 
 
@@ -215,17 +223,22 @@ def _process_rows(terms, seed, unique):
     the /phoenix/random_csv_node_toggles endpoint that resolves node
     bypass state before a prompt is queued.
 
-    A blank (or whitespace-only) line is skipped entirely rather than
+    A blank (or whitespace-only) line, or a comment line (starts with #,
+    leading whitespace ignored), is skipped entirely rather than
     contributing an empty entry, so it does NOT reserve a slot for its
     own placeholder — every following line shifts up by one placeholder
-    index instead. E.g. with 3 lines where line 2 is blank, line 3 is
-    mapped to $2 (not $3), and $3 is left in the text untouched. Only a
-    blank line at the very end is harmless, since it behaves the same as
-    simply having one row fewer than there are placeholders."""
+    index instead. E.g. with 3 lines where line 2 is blank or a comment,
+    line 3 is mapped to $2 (not $3), and $3 is left in the text
+    untouched. Only a blank/comment line at the very end is harmless,
+    since it behaves the same as simply having one row fewer than there
+    are placeholders."""
     rng = random.Random(seed)
     used = set()
     rows_out = []
-    for row in (_split_csv_row(line) for line in terms.splitlines()):
+    for line in terms.splitlines():
+        if line.strip().startswith("#"):
+            continue
+        row = _split_csv_row(line)
         fields = [field.strip() for field in row if field.strip()]
         row_unique = unique or UNIQUE_KEYWORD in fields
         candidates = [f for f in fields if f != UNIQUE_KEYWORD]
@@ -321,10 +334,11 @@ class PhoenixRandomCSVTextReplace:
     contain a comma. start_index also lets you chain several of these
     nodes to cover a larger range. Same seed + same terms always picks the
     same term. A placeholder past the last CSV row is left unchanged.
-    Note that a blank line is NOT a no-op placeholder-preserving row: it
+    Note that a blank line, or a comment line (starts with #, leading
+    whitespace ignored), is NOT a no-op placeholder-preserving row: it
     is skipped entirely, so every row after it shifts up by one
     placeholder index (e.g. a blank line 2 makes line 3 map to $2, not
-    $3) — only a blank line at the very end is harmless.
+    $3) — only a blank/comment line at the very end is harmless.
 
     Rows are independent by default, so the same term can be picked for
     more than one placeholder. Set 'unique' to make every row avoid terms
@@ -376,10 +390,12 @@ class PhoenixRandomCSVTextReplace:
     no such padding. A picked option gets exactly one space inserted
     before it — any whitespace already written before the block in the
     source text (e.g. for readability) is absorbed into that, so it
-    never doubles up or leaves a stray space when the pick is empty. An
-    option's text may contain commas (quote it like any CSV field with a
-    comma), but not an unescaped double quote (use "" to embed a literal
-    one) or unmatched parens."""
+    never doubles up or leaves a stray space when the pick is empty. A
+    single-word option needs no quotes at all, e.g. _CHANCE(0.2 happy
+    0.3 sad)_; quote it only if it needs whitespace, a comma, or a paren
+    in its text (quote it like any CSV field with a comma), in which
+    case an unescaped double quote isn't allowed (use "" to embed a
+    literal one)."""
 
     DESCRIPTION = (
         "Replaces sequential placeholders ($1, $2, ...) in a text with a "
@@ -413,9 +429,10 @@ class PhoenixRandomCSVTextReplace:
                     "tooltip": (
                         "CSV: one row per placeholder, row order = start_index, start_index+1, ... "
                         "Any number of rows/columns. Quote a field to include a literal comma, e.g. \"a, b\",c. "
-                        "A blank line is skipped entirely, not treated as an empty row, so every row below it "
-                        "shifts up by one placeholder index instead of leaving its own placeholder unchanged — "
-                        "avoid blank lines except at the very end. "
+                        "A blank line, or a comment line starting with # (leading whitespace ignored), is "
+                        "skipped entirely, not treated as an empty row, so every row below it shifts up by "
+                        "one placeholder index instead of leaving its own placeholder unchanged — avoid "
+                        "blank/comment lines except at the very end. "
                         "Add the field _UNIQUE_ to a row to make just that row avoid terms already picked by "
                         "another unique row this run (it's removed before picking, not a candidate itself). "
                         "A row containing only _NONE_ removes its placeholder from the output instead of "
@@ -428,12 +445,14 @@ class PhoenixRandomCSVTextReplace:
                         "the candidate carrying it bypasses nodename when picked, other candidates in the "
                         "row leave it active unless they carry their own _NOTNODE tag for it. Add any "
                         "number of _CHANCE(...)_ blocks to a candidate for a nested weighted pick, resolved "
-                        "and inserted in place only if that candidate is picked, e.g. _CHANCE(.2 \"with "
-                        "scars\" .3 \"with fish scales\")_ — any number of WEIGHT \"text\" pairs, no "
-                        "separator needed between them; weights summing to under 1 silently leave the "
-                        "remainder blank that often, 1 or more is a plain weighted pick with no padding. "
-                        "A picked option gets exactly one space inserted before it, absorbing any "
-                        "whitespace already written before the block for readability."
+                        "and inserted in place only if that candidate is picked, e.g. _CHANCE(0.2 happy 0.3 "
+                        "sad)_ — any number of WEIGHT text pairs, no separator needed between them; weights "
+                        "summing to under 1 silently leave the remainder blank that often, 1 or more is a "
+                        "plain weighted pick with no padding. A picked option gets exactly one space "
+                        "inserted before it, absorbing any whitespace already written before the block for "
+                        "readability. A single-word option needs no quotes; quote it only if it needs "
+                        "whitespace, a comma, or a paren in its text, e.g. _CHANCE(.2 \"with scars\" .3 "
+                        "\"big, scary\")_."
                     ),
                 }),
                 "seed": ("INT", {

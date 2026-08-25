@@ -4,12 +4,13 @@ Replaces sequential placeholders (`search_string` + index, e.g. `$1`, `$2`, ...)
 
 `terms` is CSV: each row is one placeholder's comma-separated candidates (quote a field to include a literal comma). Row order maps to `start_index`, `start_index+1`, ... — any number of rows/placeholders is supported. Chain several nodes to cover a larger range by offsetting `start_index`, e.g. one node covering `$1`-`$5`, a second with `start_index=6` covering `$6`-`$10`.
 
-Same `seed` + same `terms` always picks the same term. A placeholder past the last CSV row is left unchanged. A blank line is skipped entirely rather than preserving its own placeholder, so every row after it shifts up by one index — only a trailing blank line is harmless.
+Same `seed` + same `terms` always picks the same term. A placeholder past the last CSV row is left unchanged. A blank line, or a comment line starting with `#` (leading whitespace ignored), is skipped entirely rather than preserving its own placeholder, so every row after it shifts up by one index — only a trailing blank/comment line is harmless.
 
 ## Candidate tags at a glance
 
 | Tag | Effect |
 | --- | --- |
+| `#...` (whole line) | Comment line — ignored entirely, just like a blank line. |
 | `_UNIQUE_` | Marks this row as mutually unique with other `_UNIQUE_` rows this run. |
 | `_NONE_` | Row's only field → removes its placeholder from the output entirely. |
 | `_NUMBER_` (e.g. `_2_`) | Weights how often the candidate is picked (default 1). |
@@ -50,7 +51,7 @@ A candidate may also carry any number of `_CHANCE(...)_` blocks: a nested weight
 - Weights summing to under 1 silently leave the remainder blank that often — here, 50% of the time neither option is inserted.
 - 1 or more is a plain weighted pick with no padding.
 - A picked option gets exactly one space inserted before it, absorbing any whitespace already written before the block for readability.
-- An option's text may contain a comma (quote it like any CSV field), but not an unescaped double quote (double it, `""`, to embed a literal one) or unmatched parens.
+- A single-word option needs no quotes at all, e.g. `_CHANCE(0.2 happy 0.3 sad)_`. Quote it only if the text needs whitespace, a comma, or a paren, e.g. `_CHANCE(0.2 "with scars" 0.3 "big, scary")_` — an unescaped double quote isn't allowed inside a quoted option (double it, `""`, to embed a literal one).
 
 ## Outputs
 
