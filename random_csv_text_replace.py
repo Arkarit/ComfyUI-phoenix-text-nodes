@@ -8,9 +8,65 @@ UNIQUE_KEYWORD = "_UNIQUE_"
 NONE_KEYWORD = "_NONE_"
 WEIGHT_PATTERN = re.compile(r"_(\d+(?:\.\d+)?)_")
 NODE_TAG_PATTERN = re.compile(r"_NODE\(([^)]*)\)_")
+NOTNODE_TAG_PATTERN = re.compile(r"_NOTNODE\(([^)]*)\)_")
 TAG_PREFIX_PATTERN = re.compile(
-    r"^\s*(?:(?:_\d+(?:\.\d+)?_|_NODE\([^)]*\)_)\s*)*$"
+    r"^\s*(?:(?:_\d+(?:\.\d+)?_|_NODE\([^)]*\)_|_NOTNODE\([^)]*\)_)\s*)*$"
 )
+CHANCE_OPEN = "_CHANCE("
+CHANCE_NUMBER_PATTERN = re.compile(r"\d+(?:\.\d+)?|\.\d+")
+CHANCE_PLACEHOLDER_PATTERN = re.compile("[ \\t]*\x00CH(\\d+)\x00")
+
+
+def _scan_chance_block(text, start):
+    """text[start:] must begin with _CHANCE(. Scans forward parsing
+    whitespace-separated "WEIGHT "quoted text"" pairs (any number of
+    them, no separator needed between pairs since each pair is
+    self-delimiting) until the terminating )_. A doubled quote ("")
+    inside a quoted option escapes a literal quote, matching
+    _split_csv_row's own convention, so an option's text may contain
+    commas, parens, anything except an unescaped quote. Returns
+    (end_index, pairs) where end_index is the index just past the
+    closing )_ and pairs is a list of (weight: float, text: str)
+    tuples, in source order. Malformed input (a stray character where a
+    number/quote was expected, or a block that's never closed) simply
+    stops parsing at that point rather than raising, returning
+    whatever end_index/pairs were reached so far."""
+    n = len(text)
+    i = start + len(CHANCE_OPEN)
+    pairs = []
+    while i < n:
+        while i < n and text[i].isspace():
+            i += 1
+        if i + 1 < n and text[i] == ')' and text[i + 1] == '_':
+            return i + 2, pairs
+        match = CHANCE_NUMBER_PATTERN.match(text, i)
+        if not match:
+            return i, pairs
+        weight = float(match.group(0))
+        i = match.end()
+        while i < n and text[i].isspace():
+            i += 1
+        if i >= n or text[i] != '"':
+            return i, pairs
+        i += 1
+        buf = []
+        closed = False
+        while i < n:
+            c = text[i]
+            if c == '"':
+                if i + 1 < n and text[i + 1] == '"':
+                    buf.append('"')
+                    i += 2
+                    continue
+                i += 1
+                closed = True
+                break
+            buf.append(c)
+            i += 1
+        if not closed:
+            return i, pairs
+        pairs.append((weight, "".join(buf)))
+    return i, pairs
 
 
 def _split_csv_row(line):
@@ -19,7 +75,11 @@ def _split_csv_row(line):
     (_2_) / _NODE(name)_ tags, e.g. _2_ _NODE(Real)_ "oily, dark". Python's
     csv module only treats a quote as special at the very start of a
     field, so a tag placed before a quoted field containing a comma would
-    otherwise cause csv to split the field in the wrong place."""
+    otherwise cause csv to split the field in the wrong place. A
+    _CHANCE(...)_ block (see _scan_chance_block) is likewise copied
+    through verbatim as a single unit regardless of where in the field
+    it appears, so the commas inside its own quoted option texts don't
+    get mistaken for field separators either."""
     fields = []
     buf = []
     in_quotes = False
@@ -44,6 +104,11 @@ def _split_csv_row(line):
             buf = []
             i += 1
             continue
+        if line.startswith(CHANCE_OPEN, i):
+            end, _ = _scan_chance_block(line, i)
+            buf.append(line[i:end])
+            i = end
+            continue
         if ch == '"' and TAG_PREFIX_PATTERN.match("".join(buf)):
             in_quotes = True
             i += 1
@@ -54,15 +119,78 @@ def _split_csv_row(line):
     return fields
 
 
+def _extract_chance_blocks(text):
+    """Replaces every _CHANCE(...)_ block in text with a NUL-delimited
+    placeholder (e.g. "\\x00CH0\\x00"), so the rest of _parse_candidate
+    (weight/_NODE/_NOTNODE stripping, outer quote-stripping) never has
+    to deal with the block's internal quotes/parens. Returns
+    (text_with_placeholders, specs) where specs[i] is the parsed
+    (weight, text) pairs list for placeholder CH<i>."""
+    specs = []
+    out = []
+    i = 0
+    n = len(text)
+    while i < n:
+        if text.startswith(CHANCE_OPEN, i):
+            end, pairs = _scan_chance_block(text, i)
+            out.append(f"\x00CH{len(specs)}\x00")
+            specs.append(pairs)
+            i = end
+            continue
+        out.append(text[i])
+        i += 1
+    return "".join(out), specs
+
+
+def _resolve_chance_placeholders(text, specs, rng):
+    """Substitutes each CH<i> placeholder left by _extract_chance_blocks
+    with one option picked (via the row's own seeded rng) from its
+    pairs, weighted exactly like a normal candidate pick: if the pairs'
+    weights sum to less than 1, an implicit ("", 1 - sum) option pads
+    the remainder so nothing is picked that often; if the sum is >= 1,
+    no padding happens and it's a plain weighted pick among the given
+    options. Any spaces/tabs already in the source text right before the
+    _CHANCE(...)_ block (typically just there for readability, e.g. "...
+    _CHANCE(...)_") are consumed along with the placeholder itself: a
+    picked non-empty option gets exactly one space inserted before it
+    instead (any leading whitespace already in the option text is
+    dropped first, so authors don't have to worry about doubling it up),
+    while a picked empty option inserts nothing at all, not even a
+    space — so the surrounding text's own formatting never leaks an
+    extra/missing space into the result either way."""
+    def repl(match):
+        pairs = specs[int(match.group(1))]
+        options = list(pairs)
+        total = sum(weight for weight, _ in options)
+        if total < 1:
+            options.append((1 - total, ""))
+        picked = rng.choices(options, weights=[weight for weight, _ in options], k=1)[0][1]
+        picked = picked.lstrip()
+        return f" {picked}" if picked else ""
+
+    return CHANCE_PLACEHOLDER_PATTERN.sub(repl, text)
+
+
 def _parse_candidate(candidate):
-    """Splits a candidate like "_NODE(A)_ _2_ green" into its display text
-    "green", its weight 2.0 (default 1.0 without a _NUMBER_ token), and the
-    node names tagged on it, e.g. ["A"] (a candidate can carry any number
-    of _NODE(name)_ tags, or none). Quotes around the display text are
-    already stripped by _split_csv_row, so the quote-stripping below is
-    just a defensive fallback."""
-    node_names = [name.strip() for name in NODE_TAG_PATTERN.findall(candidate) if name.strip()]
-    text = NODE_TAG_PATTERN.sub("", candidate)
+    """Splits a candidate like '_NODE(A)_ _NOTNODE(B)_ _2_ "blue, thick"
+    _CHANCE(.2 "with scars" .3 " with fish scales")_' into its display
+    text "blue, thick" (its _CHANCE(...)_ block(s) left as unresolved
+    NUL-delimited placeholders — see _extract_chance_blocks/
+    _resolve_chance_placeholders — since which option they resolve to
+    depends on whether this very candidate ends up picked), its weight
+    2.0 (default 1.0 without a _NUMBER_ token), the node names tagged on
+    it via _NODE(...)_, e.g. ["A"], and the node names tagged on it via
+    _NOTNODE(...)_, e.g. ["B"] (a candidate can carry any number of
+    either tag, or none). _CHANCE(...)_ blocks are extracted first, so
+    the quotes/commas/whitespace inside them never confuse the
+    _NODE/_NOTNODE/weight parsing or the outer quote-stripping below
+    (which is mostly a defensive fallback, since quotes around the
+    display text are already stripped by _split_csv_row)."""
+    text, chance_specs = _extract_chance_blocks(candidate)
+    node_names = [name.strip() for name in NODE_TAG_PATTERN.findall(text) if name.strip()]
+    notnode_names = [name.strip() for name in NOTNODE_TAG_PATTERN.findall(text) if name.strip()]
+    text = NOTNODE_TAG_PATTERN.sub("", text)
+    text = NODE_TAG_PATTERN.sub("", text)
     match = WEIGHT_PATTERN.search(text)
     if match:
         text = text[:match.start()] + text[match.end():]
@@ -72,17 +200,20 @@ def _parse_candidate(candidate):
     text = text.strip()
     if len(text) >= 2 and text[0] == '"' and text[-1] == '"':
         text = text[1:-1]
-    return text, weight, node_names
+    return text, weight, node_names, notnode_names, chance_specs
 
 
 def _process_rows(terms, seed, unique):
     """Parses terms and picks one candidate per row exactly like
     PhoenixRandomCSVTextReplace.replace() does, for rows that have
     candidates. Returns a list of per-row dicts: 'text' (the picked
-    term), 'node_names' (the picked candidate's _NODE(...)_ tags), and
-    'universe' (every node name tagged anywhere in that row, picked or
-    not) — used both by replace() and by the /phoenix/random_csv_node_toggles
-    endpoint that resolves node bypass state before a prompt is queued.
+    term), 'node_names' (the picked candidate's _NODE(...)_ tags),
+    'notnode_names' (the picked candidate's _NOTNODE(...)_ tags),
+    'pos_universe' (every node name tagged via _NODE(...)_ anywhere in
+    that row) and 'neg_universe' (every node name tagged via
+    _NOTNODE(...)_ anywhere in that row) — used both by replace() and by
+    the /phoenix/random_csv_node_toggles endpoint that resolves node
+    bypass state before a prompt is queued.
 
     A blank (or whitespace-only) line is skipped entirely rather than
     contributing an empty entry, so it does NOT reserve a slot for its
@@ -102,35 +233,71 @@ def _process_rows(terms, seed, unique):
             continue
 
         parsed = [_parse_candidate(c) for c in candidates]
-        universe = sorted({name for _, _, names in parsed for name in names})
+        pos_universe = sorted({name for _, _, names, _, _ in parsed for name in names})
+        neg_universe = sorted({name for _, _, _, names, _ in parsed for name in names})
 
         if candidates == [NONE_KEYWORD]:
-            choice_text, choice_names = "", []
+            choice_text, choice_names, choice_notnode_names, choice_chance_specs = "", [], [], []
         else:
             pool = parsed
             if row_unique:
                 remaining = [p for p in parsed if p[0] not in used]
                 if remaining:
                     pool = remaining
-            choice_text, _, choice_names = rng.choices(pool, weights=[w for _, w, _ in pool], k=1)[0]
+            choice_text, _, choice_names, choice_notnode_names, choice_chance_specs = rng.choices(
+                pool, weights=[w for _, w, _, _, _ in pool], k=1
+            )[0]
             if row_unique:
                 used.add(choice_text)
 
-        rows_out.append({"text": choice_text, "node_names": choice_names, "universe": universe})
+        choice_text = _resolve_chance_placeholders(choice_text, choice_chance_specs, rng)
+
+        rows_out.append({
+            "text": choice_text,
+            "node_names": choice_names,
+            "notnode_names": choice_notnode_names,
+            "pos_universe": pos_universe,
+            "neg_universe": neg_universe,
+        })
     return rows_out
 
 
 def _resolve_node_toggles(terms, seed, unique):
-    """Resolves which _NODE(name)_-tagged nodes should be active vs.
-    bypassed for a run: a name is active if the row's picked candidate
-    carries its tag, bypassed if the row merely mentions it elsewhere.
-    Rows are applied in order, so a name mentioned in more than one row
-    takes its state from the last row that mentions it."""
+    """Resolves which _NODE(name)_/_NOTNODE(name)_-tagged nodes should be
+    active vs. bypassed for a run.
+
+    _NODE(name)_ (positive tag): the row's picked candidate carrying it
+    makes name active; the row merely mentioning name elsewhere (via
+    _NODE) bypasses it by default.
+
+    _NOTNODE(name)_ (negative tag, inverse of the above): the row's
+    picked candidate carrying it makes name bypassed; the row merely
+    mentioning name elsewhere (via _NOTNODE) leaves it active by
+    default.
+
+    If the picked candidate itself carries an explicit tag for name
+    (positive or negative), that decides it directly. Otherwise the
+    default above applies, based on how name was tagged elsewhere in the
+    row. Rows are applied in order, so a name mentioned in more than one
+    row takes its state from the last row that mentions it."""
     state = {}
     for row in _process_rows(terms, seed, unique):
-        chosen = set(row["node_names"])
-        for name in row["universe"]:
-            state[name] = name in chosen
+        chosen_pos = set(row["node_names"])
+        chosen_neg = set(row["notnode_names"])
+        for name in row["pos_universe"]:
+            if name in chosen_pos:
+                state[name] = True
+            elif name in chosen_neg:
+                state[name] = False
+            else:
+                state[name] = False
+        for name in row["neg_universe"]:
+            if name in chosen_pos:
+                state[name] = True
+            elif name in chosen_neg:
+                state[name] = False
+            elif name not in row["pos_universe"]:
+                state[name] = True
     return state
 
 
@@ -189,7 +356,30 @@ class PhoenixRandomCSVTextReplace:
     queue time (via a *_node_toggle.js companion script hitting the
     /phoenix/random_csv_node_toggles endpoint), not during this node's
     own execution, since node bypass state is fixed before a prompt
-    starts running."""
+    starts running.
+
+    _NOTNODE(nodename)_ works exactly like _NODE(nodename)_, but
+    inverted: the candidate carrying it bypasses nodename when picked,
+    while every other candidate in that row leaves nodename active
+    unless it carries its own _NOTNODE(nodename)_ tag. _NODE and
+    _NOTNODE can be mixed for the same name in the same row; a candidate
+    with an explicit tag (either kind) always wins for that name.
+
+    A candidate may also carry any number of _CHANCE(...)_ blocks — a
+    nested weighted pick, resolved only if that candidate itself gets
+    picked, and substituted in place. Each block holds any number of
+    WEIGHT "text" pairs (no separator needed between pairs, e.g.
+    _CHANCE(.2 "with scars" .3 "with fish scales")_): if the weights sum
+    to less than 1 the remainder silently resolves to nothing being
+    inserted (so with .2 + .3 here, 50% of the time neither option is
+    inserted); if the sum is 1 or more, it's a plain weighted pick with
+    no such padding. A picked option gets exactly one space inserted
+    before it — any whitespace already written before the block in the
+    source text (e.g. for readability) is absorbed into that, so it
+    never doubles up or leaves a stray space when the pick is empty. An
+    option's text may contain commas (quote it like any CSV field with a
+    comma), but not an unescaped double quote (use "" to embed a literal
+    one) or unmatched parens."""
 
     DESCRIPTION = (
         "Replaces sequential placeholders (search_string + index, e.g. "
@@ -222,8 +412,16 @@ class PhoenixRandomCSVTextReplace:
         "(not during this node's own execution) a companion JS extension "
         "activates the node names tagged on each row's picked candidate "
         "and bypasses every other node name mentioned elsewhere in that "
-        "row, with the last row mentioning a given name winning. Shows "
-        "the result in a read-only preview widget on the node itself. "
+        "row, with the last row mentioning a given name winning. "
+        "_NOTNODE(nodename)_ is the inverse: the candidate carrying it "
+        "bypasses nodename when picked, other candidates in the row "
+        "leave it active unless they carry their own _NOTNODE tag for "
+        "it. A candidate may also carry _CHANCE(...)_ blocks: a nested "
+        "weighted pick of WEIGHT \"text\" pairs, resolved and inserted "
+        "in place only if that candidate is picked, e.g. _CHANCE(.2 "
+        "\"with scars\" .3 \"with fish scales\")_ — weights summing to "
+        "under 1 silently leave the remainder blank, 1 or more is a "
+        "plain weighted pick. Shows the result in a read-only preview widget on the node itself. "
         "Also outputs replaced_text: just the picked term for each "
         "processed row, one per line in row order (rows with a "
         "missing/empty CSV line are skipped, _NONE_ rows contribute an "
@@ -265,7 +463,16 @@ class PhoenixRandomCSVTextReplace:
                         "the token is stripped from the term before use. Add any number of _NODE(nodename)_ "
                         "tags to a candidate to name other nodes (by title) to activate when it's picked; "
                         "at queue time every other node name mentioned elsewhere in that row is bypassed "
-                        "instead (last row mentioning a name wins)."
+                        "instead (last row mentioning a name wins). _NOTNODE(nodename)_ is the inverse: "
+                        "the candidate carrying it bypasses nodename when picked, other candidates in the "
+                        "row leave it active unless they carry their own _NOTNODE tag for it. Add any "
+                        "number of _CHANCE(...)_ blocks to a candidate for a nested weighted pick, resolved "
+                        "and inserted in place only if that candidate is picked, e.g. _CHANCE(.2 \"with "
+                        "scars\" .3 \"with fish scales\")_ — any number of WEIGHT \"text\" pairs, no "
+                        "separator needed between them; weights summing to under 1 silently leave the "
+                        "remainder blank that often, 1 or more is a plain weighted pick with no padding. "
+                        "A picked option gets exactly one space inserted before it, absorbing any "
+                        "whitespace already written before the block for readability."
                     ),
                 }),
                 "seed": ("INT", {

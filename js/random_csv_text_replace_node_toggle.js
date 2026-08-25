@@ -1,9 +1,10 @@
 import { app } from "../../../scripts/app.js";
 import { api } from "../../../scripts/api.js";
 
-// Resolves _NODE(nodename)_ tags in a PhoenixRandomCSVTextReplace node's
-// terms before a prompt is queued, and sets the mode (active/bypass) of
-// the named nodes accordingly. This has to happen here rather than in
+// Resolves _NODE(nodename)_/_NOTNODE(nodename)_ tags in a
+// PhoenixRandomCSVTextReplace node's terms before a prompt is queued, and
+// sets the mode (active/bypass) of the named nodes accordingly. This has
+// to happen here rather than in
 // the node's own Python execution: node bypass state is baked into the
 // prompt when the graph is converted, before the backend runs anything,
 // so a pick made during this node's execution is already too late to
@@ -76,7 +77,7 @@ function widgetValue(node, name) {
 
 async function resolveToggles(node) {
 	const terms = widgetValue(node, "terms");
-	if (typeof terms !== "string" || !terms.includes("_NODE(")) {
+	if (typeof terms !== "string" || (!terms.includes("_NODE(") && !terms.includes("_NOTNODE("))) {
 		return null;
 	}
 	const seed = widgetValue(node, "seed");
