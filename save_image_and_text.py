@@ -11,21 +11,9 @@ from comfy.cli_args import args
 
 class PhoenixSaveImageAndText:
     DESCRIPTION = (
-        "Saves images together with up to two optional matching text "
-        "files (e.g. a caption and a second variant), using the same "
-        "filename_prefix templating as the built-in Save Image node. All "
-        "files are written from a single counter computed once per call, "
-        "so the numbers are always in sync (e.g. myImage_00023_.png next "
-        "to myImage_00023_.txt and myImage_00023_2.txt) regardless of how "
-        "the rest of the graph is wired. text2_postfix controls the "
-        "second text file's suffix before the extension (default '2'). "
-        "Connect 'path' to bypass filename_prefix/counter entirely and "
-        "save at an exact location instead — full path, no extension, "
-        "e.g. this node's own 'path' output, or a location outside the "
-        "ComfyUI output folder. If 'seed' is connected, an extra empty "
-        "marker file is written next to the image using the same base "
-        "name plus 'seed_<value>' (e.g. dream_00470_.png -> "
-        "dream_00470_seed_1234567, no extension)."
+        "Saves images together with up to two optional text files and an "
+        "optional seed marker file, all using one counter kept in sync. "
+        "See this node's Info tab (Properties Panel) for full details."
     )
     OUTPUT_NODE = True
 

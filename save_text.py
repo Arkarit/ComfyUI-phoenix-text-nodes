@@ -65,13 +65,9 @@ def get_save_text_path(filename_prefix, output_dir, ext=".txt"):
 class PhoenixSaveText:
     DESCRIPTION = (
         "Saves standalone text to the ComfyUI output directory using the "
-        "same filename_prefix templating (%date%, %time% placeholders, "
-        "subfolders via a path in the prefix) and auto-incrementing "
-        "counter scheme as the built-in Save Image node. The counter is "
-        "based only on this node's own .txt history, so it's independent "
-        "of any Save Image node — for text saved alongside images with "
-        "guaranteed matching numbers, use 'Save Image + Text (Phoenix)' "
-        "instead."
+        "same filename_prefix templating and counter scheme as the "
+        "built-in Save Image node. See this node's Info tab (Properties "
+        "Panel) for full details."
     )
     OUTPUT_NODE = True
 

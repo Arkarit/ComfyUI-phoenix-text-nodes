@@ -5,11 +5,9 @@ COMMENT_LINE_PATTERN = re.compile(r"^\s*#")
 
 class PhoenixFilterComments:
     DESCRIPTION = (
-        "Removes comment lines from the input text entirely, so they "
-        "never reach whatever comes next (e.g. a normal CLIP Text "
-        "Encode). A line is a comment if it starts with # (leading "
-        "whitespace is ignored); every other line passes through "
-        "unchanged."
+        "Removes comment lines (starting with #) from the input text "
+        "entirely. See this node's Info tab (Properties Panel) for full "
+        "details."
     )
 
     @classmethod

@@ -1,5 +1,8 @@
 class PhoenixPrependText:
-    DESCRIPTION = "Prepends a fixed string to the start of the input text."
+    DESCRIPTION = (
+        "Prepends a fixed string to the start of the input text. See "
+        "this node's Info tab (Properties Panel) for full details."
+    )
 
     @classmethod
     def INPUT_TYPES(cls):

@@ -13,18 +13,10 @@ def _resolve_pattern(path):
 
 class PhoenixLoadText:
     DESCRIPTION = (
-        "Loads a text file matched by a wildcard path (e.g. "
-        "input/random/random*.txt — supports *, ?, [seq], and ** for "
-        "recursive matching). A relative path resolves against the "
-        "ComfyUI root (which contains the input/output folders); use a "
-        "path starting with a drive letter or leading slash for an "
-        "OS-absolute path instead. Matches are sorted alphabetically for "
-        "a stable order, then index picks one: -1 = random match (via "
-        "seed), 0 = first match, N>0 = the match at that position (1 = "
-        "second match, 2 = third, ...). If no file is found (empty "
-        "path, no match, index out of range, unreadable file), the text "
-        "output falls back to alternative_text, loaded is False, and the "
-        "preview widget explains why."
+        "Loads a text file matched by a wildcard path, with "
+        "random/indexed selection and a fallback for when nothing "
+        "matches. See this node's Info tab (Properties Panel) for full "
+        "details."
     )
     OUTPUT_NODE = True
 

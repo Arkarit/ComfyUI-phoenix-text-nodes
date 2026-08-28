@@ -1,5 +1,8 @@
 class PhoenixAppendText:
-    DESCRIPTION = "Appends a fixed string to the end of the input text."
+    DESCRIPTION = (
+        "Appends a fixed string to the end of the input text. See this "
+        "node's Info tab (Properties Panel) for full details."
+    )
 
     @classmethod
     def INPUT_TYPES(cls):

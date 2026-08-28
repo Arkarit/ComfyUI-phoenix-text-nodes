@@ -3,15 +3,10 @@ MAX_INPUTS = 100
 
 class PhoenixFlexConcat:
     DESCRIPTION = (
-        "Inserts any number of connected values into a text template, "
-        "placeholder-style as in Phoenix Random CSV Text Replace ($1, $2, "
-        "... — always starting at 1). 'count' (1-100) sets how many input "
-        "sockets the node shows on screen — a frontend extension "
-        "adds/removes them to match. Each socket is optional and "
-        "typeless, so anything can be connected (e.g. a seed INT), and "
-        "its value is converted to text before substitution. If 'text' is "
-        "left completely empty, the connected values are joined with "
-        "newlines instead."
+        "Inserts any number of connected values into a text template "
+        "using $1, $2, ... placeholders (or joins them with newlines if "
+        "the template is empty). See this node's Info tab (Properties "
+        "Panel) for full details."
     )
 
     @classmethod

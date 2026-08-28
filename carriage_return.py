@@ -1,5 +1,8 @@
 class PhoenixCarriageReturn:
-    DESCRIPTION = "Outputs a string of 'number' newline characters, e.g. to join text pieces without a delimiter widget."
+    DESCRIPTION = (
+        "Outputs a string of 'number' newline characters. See this "
+        "node's Info tab (Properties Panel) for full details."
+    )
 
     @classmethod
     def INPUT_TYPES(cls):
