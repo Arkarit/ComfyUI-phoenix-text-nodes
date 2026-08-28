@@ -22,7 +22,10 @@ class PhoenixSaveImageAndText:
         "Connect 'path' to bypass filename_prefix/counter entirely and "
         "save at an exact location instead — full path, no extension, "
         "e.g. this node's own 'path' output, or a location outside the "
-        "ComfyUI output folder."
+        "ComfyUI output folder. If 'seed' is connected, an extra empty "
+        "marker file is written next to the image using the same base "
+        "name plus 'seed_<value>' (e.g. dream_00470_.png -> "
+        "dream_00470_seed_1234567, no extension)."
     )
     OUTPUT_NODE = True
 
@@ -58,6 +61,10 @@ class PhoenixSaveImageAndText:
                     "forceInput": True,
                     "tooltip": "Exact save location: full path without extension (e.g. from another Save Image + Text node's 'path' output). Overrides filename_prefix/counter — the image is saved as '<path>.png', the text (if given) as '<path>.txt'.",
                 }),
+                "seed": ("INT", {
+                    "forceInput": True,
+                    "tooltip": "If connected, an extra empty marker file is written alongside the image: same base name plus 'seed_<value>', no extension (e.g. dream_00470_.png -> dream_00470_seed_1234567).",
+                }),
             },
             "hidden": {
                 "prompt": "PROMPT", "extra_pnginfo": "EXTRA_PNGINFO"
@@ -69,7 +76,7 @@ class PhoenixSaveImageAndText:
     FUNCTION = "save"
     CATEGORY = "phoenix/text"
 
-    def save(self, images, filename_prefix="ComfyUI", text=None, text2=None, text2_postfix="2", path=None, prompt=None, extra_pnginfo=None):
+    def save(self, images, filename_prefix="ComfyUI", text=None, text2=None, text2_postfix="2", path=None, seed=None, prompt=None, extra_pnginfo=None):
         results = []
         last_base_path = ""
 
@@ -117,6 +124,8 @@ class PhoenixSaveImageAndText:
             if text2 is not None:
                 with open(base_path + text2_postfix + ".txt", "w", encoding="utf-8") as f:
                     f.write(text2)
+            if seed is not None:
+                open(base_path + f"seed_{seed}", "w").close()
 
             results.append({
                 "filename": base + ".png",
