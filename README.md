@@ -21,8 +21,14 @@ Custom node pack for ComfyUI.
   - `text2` (optional) — a second, independent text (e.g. an alternate caption variant); left unconnected, it isn't saved. The filename uses `text2_postfix` (default `"2"`) as a suffix before the extension, e.g. `AAA/myImage_00023_2.txt`.
   - `path` (optional) completely overrides `filename_prefix`/counter: a full path without extension, e.g. from another instance of this node. The image is saved as `<path>.png`, `text` (if given) as `<path>.txt`, `text2` (if given) as `<path><text2_postfix>.txt`. This makes it usable outside the ComfyUI output folder too (e.g. writing directly into a training dataset).
   - The `path` output produces exactly the format expected by another instance of this node's `path` input — for chaining multiple Save nodes onto the same path.
+  - `seed` (optional, int) — if connected, an extra empty marker file is written alongside the image: same base name plus `seed_<value>`, no extension (e.g. `dream_00470_.png` → `dream_00470_seed_1234567`).
 - **PhoenixAppendText** — appends a fixed text field to an incoming string and outputs the result.
 - **PhoenixPrependText** — prepends a fixed text field to an incoming string and outputs the result.
+- **PhoenixFlexConcat** — inserts any number of connected values (of any type, converted to text) into a text template using `$1`, `$2`, ... placeholders, in socket order.
+  - `count`: how many `input_N` sockets the node shows (up to 100) — the node's UI adds/removes sockets live as you change it.
+  - If `text` is left completely empty, the connected values are joined with newlines instead of being substituted into a template.
+  - `search_string`: prefix before the placeholder index (default `$`), same convention as `PhoenixRandomCSVTextReplace`.
+- **PhoenixCarriageReturn** — outputs a string of `number` newline characters, e.g. to pad text before concatenation.
 - **PhoenixFilterComments** — removes comment lines (lines starting with `#`, leading whitespace ignored) from an incoming string entirely, so they never reach whatever comes next — e.g. chain it in front of a normal `CLIP Text Encode` to let a prompt carry notes or temporarily-disabled lines without them being encoded. Every other line passes through unchanged.
 - **PhoenixLoadText** — loads a `.txt` file via a path with wildcards (`*`, `?`, `[seq]`, `**` for recursive), e.g. `input/random/random*.txt`. Relative paths are resolved against the ComfyUI root; matches are sorted alphabetically.
   - `index`: `-1` = pick a random match (via `seed`), `0` = take the first match, `>0` = the match at this position (`1` = second match, ...).

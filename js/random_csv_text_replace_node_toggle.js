@@ -13,6 +13,28 @@ import { api } from "../../../scripts/api.js";
 // selection logic PhoenixRandomCSVTextReplace.replace() uses, so the
 // toggled nodes always match the term actually substituted for the same
 // seed.
+//
+// Hooked onto app.graphToPrompt(), not app.queuePrompt() (2026-08-29):
+// in current ComfyUI frontends, app.queuePrompt() just pushes a request
+// descriptor onto a shared `queueItems` stack and, if a previous call is
+// still draining that stack (`processingQueue === true`), returns
+// immediately without doing anything else. The actual graph
+// serialization (app.graphToPrompt(), which is what reads node.mode for
+// bypass state) happens later, inside that draining loop, one queued
+// item at a time, in LIFO order. Since node.mode lives on the live node
+// object (not a per-queue-item snapshot), patching queuePrompt meant a
+// second queued render could re-toggle the shared LoRA nodes before the
+// first (still-pending) render had reached its own graphToPrompt() call
+// - baking the wrong LoRA into that first render even though its own
+// text pick was resolved correctly. Patching graphToPrompt() instead
+// keeps "set the toggles" and "serialize this exact prompt" atomic per
+// call, since the queue-draining loop awaits each graphToPrompt() call
+// in turn before moving to the next queued item. This does mean a
+// manual "export workflow"/save action (which also calls
+// app.graphToPrompt()) will now re-resolve and apply the toggles too -
+// harmless (it just syncs the saved node.mode to what the current
+// seed/terms would pick), and arguably more correct than leaving it
+// stale.
 const ENDPOINT = "/phoenix/random_csv_node_toggles";
 const NODE_TYPE = "PhoenixRandomCSVTextReplace";
 const MODE_ALWAYS = 0;
@@ -101,8 +123,15 @@ async function resolveToggles(node) {
 	}
 }
 
+let callCounter = 0;
+
 async function applyNodeToggles() {
+	const callId = ++callCounter;
+	const t0 = performance.now();
 	const sourceNodes = app.graph._nodes.filter((n) => n.type === NODE_TYPE && n.mode === MODE_ALWAYS);
+	console.debug(
+		`[Phoenix NodeToggle #${callId}] graphToPrompt intercepted, resolving ${sourceNodes.length} active "${NODE_TYPE}" node(s)...`
+	);
 	// Later nodes (and later rows within one node, resolved server-side)
 	// override earlier ones for the same name.
 	const state = {};
@@ -112,6 +141,7 @@ async function applyNodeToggles() {
 			Object.assign(state, result);
 		}
 	}
+	console.debug(`[Phoenix NodeToggle #${callId}] resolved state:`, state);
 
 	let changed = false;
 	for (const [title, active] of Object.entries(state)) {
@@ -121,6 +151,13 @@ async function applyNodeToggles() {
 			continue;
 		}
 		for (const target of targets) {
+			if (target.mode !== (active ? MODE_ALWAYS : MODE_BYPASS)) {
+				console.debug(
+					`[Phoenix NodeToggle #${callId}] "${title}" (id ${target.id}): mode ${target.mode} -> ${
+						active ? MODE_ALWAYS : MODE_BYPASS
+					}`
+				);
+			}
 			target.mode = active ? MODE_ALWAYS : MODE_BYPASS;
 			changed = true;
 		}
@@ -128,15 +165,16 @@ async function applyNodeToggles() {
 	if (changed) {
 		app.graph.setDirtyCanvas(true, true);
 	}
+	console.debug(`[Phoenix NodeToggle #${callId}] done in ${(performance.now() - t0).toFixed(1)}ms`);
 }
 
 app.registerExtension({
 	name: "PhoenixRandomCSVTextReplace.NodeToggle",
 	async setup() {
-		const originalQueuePrompt = app.queuePrompt.bind(app);
-		app.queuePrompt = async (...args) => {
+		const originalGraphToPrompt = app.graphToPrompt.bind(app);
+		app.graphToPrompt = async (...args) => {
 			await applyNodeToggles();
-			return originalQueuePrompt(...args);
+			return originalGraphToPrompt(...args);
 		};
 	},
 });
