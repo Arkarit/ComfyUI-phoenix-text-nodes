@@ -14,6 +14,9 @@ from . import load_text
 from . import filter_comments
 from . import flex_concat
 from . import carriage_return
+from . import load_lora
+from . import model_clip_text_pack
+from . import model_clip_text_unpack
 
 NODE_CLASS_MAPPINGS = {
     **random_csv_text_replace.NODE_CLASS_MAPPINGS,
@@ -25,6 +28,9 @@ NODE_CLASS_MAPPINGS = {
     **filter_comments.NODE_CLASS_MAPPINGS,
     **flex_concat.NODE_CLASS_MAPPINGS,
     **carriage_return.NODE_CLASS_MAPPINGS,
+    **load_lora.NODE_CLASS_MAPPINGS,
+    **model_clip_text_pack.NODE_CLASS_MAPPINGS,
+    **model_clip_text_unpack.NODE_CLASS_MAPPINGS,
 }
 NODE_DISPLAY_NAME_MAPPINGS = {
     **random_csv_text_replace.NODE_DISPLAY_NAME_MAPPINGS,
@@ -36,6 +42,9 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     **filter_comments.NODE_DISPLAY_NAME_MAPPINGS,
     **flex_concat.NODE_DISPLAY_NAME_MAPPINGS,
     **carriage_return.NODE_DISPLAY_NAME_MAPPINGS,
+    **load_lora.NODE_DISPLAY_NAME_MAPPINGS,
+    **model_clip_text_pack.NODE_DISPLAY_NAME_MAPPINGS,
+    **model_clip_text_unpack.NODE_DISPLAY_NAME_MAPPINGS,
 }
 
 WEB_DIRECTORY = "js"
