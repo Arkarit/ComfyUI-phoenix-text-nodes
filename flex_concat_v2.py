@@ -1,13 +1,12 @@
 MAX_INPUTS = 100
 
 
-class PhoenixFlexConcat:
-    DEPRECATED = True
+class PhoenixFlexConcatV2:
     DESCRIPTION = (
-        "⚠ Deprecated - has a known bypass bug (a connected input can leak "
-        "through as this node's output when it's bypassed). Kept only so "
-        "existing workflows keep working unchanged. Use 🔗 Flex Concat "
-        "(Phoenix) V2 instead for new workflows."
+        "Inserts any number of connected values into a text template "
+        "using $1, $2, ... placeholders (or joins them with newlines if "
+        "the template is empty). See this node's Info tab (Properties "
+        "Panel) for full details."
     )
 
     @classmethod
@@ -58,9 +57,9 @@ class PhoenixFlexConcat:
 
 
 NODE_CLASS_MAPPINGS = {
-    "PhoenixFlexConcat": PhoenixFlexConcat,
+    "PhoenixFlexConcatV2": PhoenixFlexConcatV2,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
-    "PhoenixFlexConcat": "🔗 Flex Concat (Phoenix)",
+    "PhoenixFlexConcatV2": "🔗 Flex Concat (Phoenix) V2",
 }

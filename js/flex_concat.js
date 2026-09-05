@@ -30,6 +30,9 @@ function syncFlexConcatInputs(node, rawCount) {
 	node.setDirtyCanvas(true, true);
 }
 
+// Deprecated (kept unchanged, bug and all, for existing workflows) - see
+// PhoenixFlexConcatV2 / flex_concat_v2.js for the fixed replacement and
+// js/docs/PhoenixFlexConcat.md for why this one is no longer touched.
 app.registerExtension({
 	name: "phoenix.flex_concat",
 
@@ -39,6 +42,17 @@ app.registerExtension({
 		const onNodeCreated = nodeType.prototype.onNodeCreated;
 		nodeType.prototype.onNodeCreated = function () {
 			onNodeCreated?.apply(this, arguments);
+
+			this.color = "#803";
+			this.bgcolor = "#500";
+			const warning = this.addWidget(
+				"button",
+				"⚠ Deprecated — use V2 instead",
+				"",
+				() => {}
+			);
+			warning.disabled = true;
+			warning.serialize = false;
 
 			const countWidget = this.widgets?.find((w) => w.name === "count");
 			if (!countWidget) return;

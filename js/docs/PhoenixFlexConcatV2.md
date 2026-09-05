@@ -1,8 +1,8 @@
-# Phoenix Flex Concat
-
-⚠ **Deprecated.** This node has a known bug: because its `input_N` sockets are typeless, bypassing this node can make ComfyUI silently route one of its *connected inputs* straight through as the `text` output instead of leaving it empty (order-dependent on the node's own socket history, so it can vary per instance). It's kept exactly as-is, unfixed, so already-saved workflows keep behaving exactly like before. **Use Phoenix Flex Concat V2 instead for anything new** — same inputs/outputs/template syntax, just without this bug.
+# Phoenix Flex Concat V2
 
 Inserts any number of connected values into a text template, using the same placeholder mechanism as Phoenix Random CSV Text Replace (`search_string` + index, e.g. `$1`, `$2`, ...) — but always starting at 1, with no `start_index`.
+
+Identical to Phoenix Flex Concat, with one difference: the fixed `text`/`count`/`search_string` slots are always kept ahead of the dynamic `input_N` sockets internally, so bypassing this node can never leak one of the connected `input_N` values through as the `text` output. Use this version for new workflows.
 
 ## Sockets
 

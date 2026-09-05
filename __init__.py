@@ -13,6 +13,7 @@ from . import prepend_text
 from . import load_text
 from . import filter_comments
 from . import flex_concat
+from . import flex_concat_v2
 from . import carriage_return
 from . import load_lora
 from . import model_clip_text_pack
@@ -27,6 +28,7 @@ NODE_CLASS_MAPPINGS = {
     **load_text.NODE_CLASS_MAPPINGS,
     **filter_comments.NODE_CLASS_MAPPINGS,
     **flex_concat.NODE_CLASS_MAPPINGS,
+    **flex_concat_v2.NODE_CLASS_MAPPINGS,
     **carriage_return.NODE_CLASS_MAPPINGS,
     **load_lora.NODE_CLASS_MAPPINGS,
     **model_clip_text_pack.NODE_CLASS_MAPPINGS,
@@ -41,6 +43,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     **load_text.NODE_DISPLAY_NAME_MAPPINGS,
     **filter_comments.NODE_DISPLAY_NAME_MAPPINGS,
     **flex_concat.NODE_DISPLAY_NAME_MAPPINGS,
+    **flex_concat_v2.NODE_DISPLAY_NAME_MAPPINGS,
     **carriage_return.NODE_DISPLAY_NAME_MAPPINGS,
     **load_lora.NODE_DISPLAY_NAME_MAPPINGS,
     **model_clip_text_pack.NODE_DISPLAY_NAME_MAPPINGS,
