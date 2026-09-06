@@ -314,6 +314,31 @@ def _resolve_node_toggles(terms, seed, unique):
     return state
 
 
+def _substitute_placeholders(text, search_string, start_index, terms):
+    """Replaces every search_string + index placeholder in text with the
+    term picked for that row, in a single left-to-right pass.
+
+    Doing it in one pass — rather than one str.replace() per row — is what
+    keeps $1 and $10 apart once a run has ten or more rows: replacing "$1"
+    first would also match the "$1" inside "$10", leaving row 1's term
+    with a stray "0" glued onto it. Matching the placeholder's whole digit
+    run instead makes each index its own placeholder.
+
+    A placeholder whose index has no row (past the last row, or below
+    start_index) is left in the text untouched, and an already-substituted
+    term is never rescanned, so a term that happens to contain something
+    that looks like a placeholder is inserted literally."""
+    pattern = re.compile(re.escape(search_string) + r"(\d+)")
+
+    def repl(match):
+        offset = int(match.group(1)) - start_index
+        if 0 <= offset < len(terms):
+            return terms[offset]
+        return match.group(0)
+
+    return pattern.sub(repl, text)
+
+
 @server.PromptServer.instance.routes.post("/phoenix/random_csv_node_toggles")
 async def _random_csv_node_toggles_route(request):
     data = await request.json()
@@ -482,12 +507,8 @@ class PhoenixRandomCSVTextReplace:
     CATEGORY = "phoenix/text"
 
     def replace(self, text, search_string, start_index, terms, seed, unique=False, preview=""):
-        result = text
-        replaced = []
-        for offset, row in enumerate(_process_rows(terms, seed, unique)):
-            replaced.append(row["text"])
-            placeholder = f"{search_string}{start_index + offset}"
-            result = result.replace(placeholder, row["text"])
+        replaced = [row["text"] for row in _process_rows(terms, seed, unique)]
+        result = _substitute_placeholders(text, search_string, start_index, replaced)
         replaced_text = "\n".join(replaced)
         return {"ui": {"text": [result]}, "result": (result, replaced_text)}
 
