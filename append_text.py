@@ -1,7 +1,11 @@
+from .prepend_text import SEPARATORS, SEPARATOR_TOOLTIP
+
+
 class PhoenixAppendText:
     DESCRIPTION = (
-        "Appends a fixed string to the end of the input text. See this "
-        "node's Info tab (Properties Panel) for full details."
+        "Appends a fixed string to the end of the input text, optionally "
+        "with a separator. See this node's Info tab (Properties Panel) for "
+        "full details."
     )
 
     @classmethod
@@ -16,6 +20,10 @@ class PhoenixAppendText:
                     "multiline": True, "default": "",
                     "tooltip": "Text appended to the end of the input.",
                 }),
+                "separator": (list(SEPARATORS), {
+                    "default": "none",
+                    "tooltip": SEPARATOR_TOOLTIP,
+                }),
             },
         }
 
@@ -24,8 +32,9 @@ class PhoenixAppendText:
     FUNCTION = "run"
     CATEGORY = "phoenix/text"
 
-    def run(self, text, append):
-        return (text + append,)
+    def run(self, text, append, separator="none"):
+        sep = SEPARATORS.get(separator, "") if (text and append) else ""
+        return (text + sep + append,)
 
 
 NODE_CLASS_MAPPINGS = {

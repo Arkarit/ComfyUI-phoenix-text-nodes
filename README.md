@@ -23,7 +23,9 @@ Custom node pack for ComfyUI.
   - The `path` output produces exactly the format expected by another instance of this node's `path` input — for chaining multiple Save nodes onto the same path.
   - `seed` (optional, int) — if connected, an extra empty marker file is written alongside the image: same base name plus `seed_<value>`, no extension (e.g. `dream_00470_.png` → `dream_00470_seed_1234567`).
 - **PhoenixAppendText** — appends a fixed text field to an incoming string and outputs the result.
+  - `separator` — what to insert between the two parts: `none` (default, direct concatenation), `newline`, `blank line` or `space`. Only inserted when both parts are non-empty.
 - **PhoenixPrependText** — prepends a fixed text field to an incoming string and outputs the result.
+  - `separator` — as above, inserted between the prepended text and the incoming text.
 - **PhoenixFlexConcat** — ⚠ deprecated, use **PhoenixFlexConcatV2** instead. Kept unchanged (bug included) so existing workflows keep behaving exactly as before. Has a known bug: since its `input_N` sockets are typeless, bypassing this node can make ComfyUI silently forward one of the connected `input_N` values through as the `text` output instead of nothing (which of them depends on the node instance's own socket-add history) — see `js/docs/PhoenixFlexConcat.md`.
 - **PhoenixFlexConcatV2** — inserts any number of connected values (of any type, converted to text) into a text template using `$1`, `$2`, ... placeholders, in socket order. Identical to `PhoenixFlexConcat` but without its bypass bug (see above) — use this one for new workflows.
   - `count`: how many `input_N` sockets the node shows (up to 100) — the node's UI adds/removes sockets live as you change it.
