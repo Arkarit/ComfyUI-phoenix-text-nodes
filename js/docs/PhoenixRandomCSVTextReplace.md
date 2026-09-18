@@ -6,11 +6,33 @@ Replaces sequential placeholders (`search_string` + index, e.g. `$1`, `$2`, ...)
 
 Same `seed` + same `terms` always picks the same term. A placeholder past the last CSV row is left unchanged. A blank line, or a comment line starting with `#` (leading whitespace ignored), is skipped entirely rather than preserving its own placeholder, so every row after it shifts up by one index — only a trailing blank/comment line is harmless.
 
+## Continuation lines
+
+A long row with many candidates gets unreadable on one line, so a row may be split over several source lines: **if a line's first non-blank character is a comma, it is appended to the last preceding line that had content** instead of starting a row of its own.
+
+```
+ocean, cat, dog, door, hallway
+# animals above, places below
+
+, forest, mountain, desert
+, castle, palace, garden
+```
+
+is one single row, identical to `ocean, cat, dog, door, hallway, forest, mountain, desert, castle, palace, garden`. Blank lines and `#` comment lines in between are ignored as usual and do **not** break the continuation, so you can group and annotate a long list freely.
+
+This deliberately departs from plain CSV. Two consequences worth knowing:
+
+- Only a *leading* comma continues a row. A trailing comma does **not** — that would make a forgotten comma at the end of a line silently swallow the next row.
+- A line that previously formed its own row purely because it started with a comma (leaving an empty first field, which was dropped) now merges into the row above it instead.
+
+A continuation line with no content line before it has nothing to attach to and stays a row of its own; its leading comma just produces an empty first field, which is dropped like any other empty field.
+
 ## Candidate tags at a glance
 
 | Tag | Effect |
 | --- | --- |
 | `#...` (whole line) | Comment line — ignored entirely, just like a blank line. |
+| `,...` (line start) | Continuation — the line is appended to the previous content line. |
 | `_UNIQUE_` | Marks this row as mutually unique with other `_UNIQUE_` rows this run. |
 | `_NONE_` | Row's only field → removes its placeholder from the output entirely. |
 | `_NUMBER_` (e.g. `_2_`) | Weights how often the candidate is picked (default 1). |

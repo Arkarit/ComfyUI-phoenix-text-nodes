@@ -211,6 +211,51 @@ def _parse_candidate(candidate):
     return text, weight, node_names, notnode_names, chance_specs
 
 
+CONTINUATION_PREFIX = ","
+
+
+def _join_continuation_lines(terms):
+    """Merges CSV continuation lines, so one logical row can be spread
+    over several source lines for readability.
+
+    A line whose first non-whitespace character is a comma is appended to
+    the last preceding line that had content. Blank lines and comment
+    lines (starting with #, leading whitespace ignored) in between are
+    passed through untouched and do NOT break the chain, so a long row
+    can be broken up and annotated freely:
+
+        ocean, cat, dog
+        # animals above, places below
+
+        , forest, mountain
+
+    is one logical row, `ocean, cat, dog, forest, mountain`. The blank
+    and comment lines produce no rows of their own, exactly as before.
+
+    A continuation line with nothing before it (it is the first content
+    in `terms`) has nothing to attach to and stays a row of its own,
+    where the leading comma just yields an empty first field that gets
+    dropped like any other empty field.
+
+    Note this deliberately departs from plain CSV: a line that used to be
+    its own row purely because it started with a comma now merges into
+    the row above it.
+
+    Returns the list of logical lines, comment/blank lines included, so
+    the per-line handling in _process_rows still sees them unchanged."""
+    lines = []
+    last_content = None
+    for line in terms.splitlines():
+        stripped = line.strip()
+        if stripped.startswith(CONTINUATION_PREFIX) and last_content is not None:
+            lines[last_content] += line.lstrip()
+            continue
+        lines.append(line)
+        if stripped and not stripped.startswith("#"):
+            last_content = len(lines) - 1
+    return lines
+
+
 def _process_rows(terms, seed, unique):
     """Parses terms and picks one candidate per row exactly like
     PhoenixRandomCSVTextReplace.replace() does, for rows that have
@@ -231,11 +276,15 @@ def _process_rows(terms, seed, unique):
     line 3 is mapped to $2 (not $3), and $3 is left in the text
     untouched. Only a blank/comment line at the very end is harmless,
     since it behaves the same as simply having one row fewer than there
-    are placeholders."""
+    are placeholders.
+
+    Source lines are first run through _join_continuation_lines(), so a
+    line starting with a comma continues the previous content line
+    instead of forming a row of its own."""
     rng = random.Random(seed)
     used = set()
     rows_out = []
-    for line in terms.splitlines():
+    for line in _join_continuation_lines(terms):
         if line.strip().startswith("#"):
             continue
         row = _split_csv_row(line)
@@ -364,6 +413,10 @@ class PhoenixRandomCSVTextReplace:
     is skipped entirely, so every row after it shifts up by one
     placeholder index (e.g. a blank line 2 makes line 3 map to $2, not
     $3) — only a blank/comment line at the very end is harmless.
+    A line whose first non-blank character is a comma is a continuation
+    of the previous content line rather than a row of its own, so a long
+    row can be split over several source lines for readability; blank and
+    comment lines in between do not break the continuation.
 
     Rows are independent by default, so the same term can be picked for
     more than one placeholder. Set 'unique' to make every row avoid terms
@@ -458,6 +511,9 @@ class PhoenixRandomCSVTextReplace:
                         "skipped entirely, not treated as an empty row, so every row below it shifts up by "
                         "one placeholder index instead of leaving its own placeholder unchanged — avoid "
                         "blank/comment lines except at the very end. "
+                        "A line whose first non-blank character is a comma continues the previous "
+                        "line instead of starting a row, so a long row can be split over several "
+                        "lines (blank/comment lines in between do not break it). "
                         "Add the field _UNIQUE_ to a row to make just that row avoid terms already picked by "
                         "another unique row this run (it's removed before picking, not a candidate itself). "
                         "A row containing only _NONE_ removes its placeholder from the output instead of "
