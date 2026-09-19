@@ -58,6 +58,14 @@ Custom node pack for ComfyUI.
 
 `WEB_DIRECTORY = "js"` is active; `.js` files in the `js/` folder are loaded automatically (see `random_csv_text_replace_preview.js` for the preview widget of `PhoenixRandomCSVTextReplace`).
 
+## Tests
+
+Run `python3 -m unittest discover -s tests -v` for isolated Python regression
+tests, and `node tests/run_node_toggle.mjs` for the JavaScript graph tests
+(Node.js is needed only for this test command). Neither requires a running
+ComfyUI instance. See [tests/README.md](tests/README.md) for scope and manual
+ComfyUI validation steps.
+
 ## Dependencies
 
 Only add to `requirements.txt` when truly necessary — all node packs share Stability Matrix's ComfyUI venv, see `requirements.txt` for details on today's NumPy/numba update conflict.

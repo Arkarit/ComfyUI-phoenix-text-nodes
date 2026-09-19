@@ -1,3 +1,5 @@
+import re
+
 MAX_INPUTS = 100
 
 
@@ -50,9 +52,12 @@ class PhoenixFlexConcatV2:
         if text == "":
             return ("\n".join(value for _, value in values),)
 
-        result = text
-        for i, value in values:
-            result = result.replace(f"{search_string}{i}", value)
+        replacements = dict(values)
+        # Match complete indices once; inserted values remain literal.
+        pattern = re.compile(re.escape(search_string) + r"(\d+)")
+        result = pattern.sub(
+            lambda match: replacements.get(int(match.group(1)), match.group(0)), text
+        )
         return (result,)
 
 

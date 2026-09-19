@@ -22,6 +22,9 @@ input_3:   1234567   (an INT, e.g. from a KSampler's seed)
 
 Change `search_string` (default `$`) to use a different placeholder prefix, e.g. `@` for `@1`, `@2`, ...
 
+Indices are matched as complete numbers, so `$1`, `$10` and `$100` are distinct.
+Inserted values are literal: a `$2` inside `input_1` is not substituted again.
+
 ## Empty-text fallback
 
 If `text` is left completely empty, there's no template to substitute into — the connected values are instead joined with newlines, in socket order, skipping unconnected ones. This is the quick way to use the node as a plain multi-input concatenator without writing a template.

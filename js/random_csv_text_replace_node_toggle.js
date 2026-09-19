@@ -102,12 +102,22 @@ function widgetValue(node, name) {
 // SetNode/GetNode works the same way a routed seed does). Returns null
 // when nothing, or nothing of this type, is wired in.
 function definesOrigin(node) {
-	const slotIndex = node.inputs?.findIndex((i) => i.name === "defines");
-	if (slotIndex == null || slotIndex < 0 || node.inputs[slotIndex].link == null) {
-		return null;
+	const visited = new Set();
+	while (node && !visited.has(node)) {
+		visited.add(node);
+		const slotIndex = node.inputs?.findIndex((i) => i.name === "defines");
+		if (slotIndex == null || slotIndex < 0 || node.inputs[slotIndex].link == null) {
+			return null;
+		}
+		const origin = resolveRealOrigin(node, slotIndex);
+		if (origin?.node?.type !== NODE_TYPE) return null;
+		node = origin.node;
+		if (node.mode === MODE_ALWAYS) return node;
+		if (node.mode !== MODE_BYPASS) return null;
+		// Bypass forwards the defines input unchanged, ignoring this node's
+		// terms and pass_through_defines widget. Follow it back to the source.
 	}
-	const origin = resolveRealOrigin(node, slotIndex);
-	return origin?.node?.type === NODE_TYPE ? origin.node : null;
+	return null;
 }
 
 // Orders the nodes so that one feeding another's "defines" input comes

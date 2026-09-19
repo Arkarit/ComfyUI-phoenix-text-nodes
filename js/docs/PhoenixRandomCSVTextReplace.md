@@ -61,6 +61,10 @@ Variables travel along the `defines` input/output sockets, not by magic:
 - `defines` (output) — the names in effect after this node's last row.
 - `pass_through_defines` (widget, default **on**) — whether the incoming names are forwarded to the output alongside this node's own. Turn it off to start a fresh scope.
 
+With forwarding off, incoming names still participate in this node's conditions.
+Only names defined by its picked candidates leave the output, including names
+that were already present on the input and are defined again here.
+
 Because it is a real link, ComfyUI orders the two nodes correctly on its own, and caching stays correct: a node's cache key already includes all of its ancestors, so changing the defining node re-runs the gated one.
 
 Within a single node no link is needed — rows are processed top to bottom, so a later row already sees what an earlier row defined.
@@ -90,6 +94,9 @@ _IF("See")_ _IF("Meer")_ needs either
 ### With `_NODE(...)_`
 
 Combining the two works: the pre-queue pass that resolves `_NODE(...)_` walks the same `defines` chain, so the LoRA a gated candidate activates matches the text that candidate produces.
+
+A bypassed Random CSV node in that chain forwards its incoming definitions
+unchanged. Its own candidate tags and `pass_through_defines` setting are ignored.
 
 ## Uniqueness
 

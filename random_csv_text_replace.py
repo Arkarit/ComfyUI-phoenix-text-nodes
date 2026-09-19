@@ -356,11 +356,12 @@ def _join_continuation_lines(terms):
     return lines
 
 
-def _process_rows(terms, seed, unique, defines=None):
+def _process_rows(terms, seed, unique, defines=None, pass_through_defines=True):
     """Parses terms and picks one candidate per row exactly like
     PhoenixRandomCSVTextReplace.replace() does, for rows that have
     candidates. Returns (rows, defined): a list of per-row dicts, and the
-    set of variable names in effect after the last row. Returns per row: 'text' (the picked
+    set of variable names in effect after the last row (only locally defined
+    names when pass_through_defines is false). Returns per row: 'text' (the picked
     term), 'node_names' (the picked candidate's _NODE(...)_ tags),
     'notnode_names' (the picked candidate's _NOTNODE(...)_ tags),
     'pos_universe' (every node name tagged via _NODE(...)_ anywhere in
@@ -396,6 +397,7 @@ def _process_rows(terms, seed, unique, defines=None):
     placeholder numbering of every following row stays put."""
     rng = random.Random(seed)
     defined = normalize_defines(defines)
+    own_defines = frozenset()
     used = set()
     rows_out = []
     for line in _join_continuation_lines(terms):
@@ -430,7 +432,8 @@ def _process_rows(terms, seed, unique, defines=None):
             choice = rng.choices(pool, weights=[p.weight for p in pool], k=1)[0]
             if row_unique:
                 used.add(choice.text)
-            defined = defined | frozenset(choice.define_names)
+            own_defines = own_defines | frozenset(choice.define_names)
+            defined = defined | own_defines
 
         choice_text = _resolve_chance_placeholders(
             choice.text if choice else "", choice.chance_specs if choice else [], rng
@@ -443,10 +446,12 @@ def _process_rows(terms, seed, unique, defines=None):
             "pos_universe": pos_universe,
             "neg_universe": neg_universe,
         })
-    return rows_out, defined
+    # Incoming names remain visible to conditions even when not forwarded.
+    # Track local definitions separately so redefining an incoming name survives.
+    return rows_out, defined if pass_through_defines else own_defines
 
 
-def _resolve_node_toggles(terms, seed, unique, defines=None):
+def _resolve_node_toggles(terms, seed, unique, defines=None, pass_through_defines=True):
     """Resolves which _NODE(name)_/_NOTNODE(name)_-tagged nodes should be
     active vs. bypassed for a run.
 
@@ -472,7 +477,7 @@ def _resolve_node_toggles(terms, seed, unique, defines=None):
     the pre-queue pass has to arrive at the same picks the Python run
     will."""
     state = {}
-    rows, defined = _process_rows(terms, seed, unique, defines)
+    rows, defined = _process_rows(terms, seed, unique, defines, pass_through_defines)
     for row in rows:
         chosen_pos = set(row["node_names"])
         chosen_neg = set(row["notnode_names"])
@@ -527,9 +532,8 @@ async def _random_csv_node_toggles_route(request):
         int(data.get("seed", 0)),
         bool(data.get("unique", False)),
         incoming,
+        pass_through_defines=bool(data.get("pass_through", True)),
     )
-    if not data.get("pass_through", True):
-        defined = defined - incoming
     return web.json_response({"toggles": state, "defines": sorted(defined)})
 
 
@@ -723,12 +727,10 @@ class PhoenixRandomCSVTextReplace:
     def replace(self, text, search_string, start_index, terms, seed, unique=False,
                 preview="", defines=None, pass_through_defines=True):
         incoming = normalize_defines(defines)
-        rows, defined = _process_rows(terms, seed, unique, incoming)
+        rows, defined = _process_rows(terms, seed, unique, incoming, pass_through_defines)
         replaced = [row["text"] for row in rows]
         result = _substitute_placeholders(text, search_string, start_index, replaced)
         replaced_text = "\n".join(replaced)
-        if not pass_through_defines:
-            defined = defined - incoming
         return {"ui": {"text": [result]}, "result": (result, replaced_text, defined)}
 
 
