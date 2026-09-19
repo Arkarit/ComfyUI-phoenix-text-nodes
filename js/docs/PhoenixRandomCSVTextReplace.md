@@ -39,6 +39,57 @@ A continuation line with no content line before it has nothing to attach to and 
 | `_NODE(name)_` | Activates node `name` when this candidate is picked, bypasses it otherwise. |
 | `_NOTNODE(name)_` | Inverse of `_NODE`: bypasses `name` when picked, active otherwise. |
 | `_CHANCE(...)_` | Nested weighted pick, resolved only if this candidate is picked. |
+| `_DEFINE("name")_` | Defines `name` when this candidate is picked. |
+| `_IF("name")_` | Gates this candidate on `name` being defined (exclusive, see below). |
+
+## Conditions: `_DEFINE` and `_IF`
+
+A candidate can define a variable when it is picked, and candidates elsewhere can be gated on it.
+
+```
+Row in an early node:   Wald, See _DEFINE("See")_
+Row in a later node:    Ein Spaziergang, _IF("See")_ Eine Bootfahrt
+```
+
+If `See` is picked in the first node, the second row can only pick `Eine Bootfahrt`; otherwise only `Ein Spaziergang`.
+
+### Wiring it up
+
+Variables travel along the `defines` input/output sockets, not by magic:
+
+- `defines` (input, optional) — the variable names arriving from an earlier node. Unconnected means no variable is defined.
+- `defines` (output) — the names in effect after this node's last row.
+- `pass_through_defines` (widget, default **on**) — whether the incoming names are forwarded to the output alongside this node's own. Turn it off to start a fresh scope.
+
+Because it is a real link, ComfyUI orders the two nodes correctly on its own, and caching stays correct: a node's cache key already includes all of its ancestors, so changing the defining node re-runs the gated one.
+
+Within a single node no link is needed — rows are processed top to bottom, so a later row already sees what an earlier row defined.
+
+### Gating is exclusive
+
+In a row where **at least one** candidate's condition is satisfied, only the satisfied candidates can be picked. If none is satisfied, only the candidates carrying no `_IF(...)_` at all can be.
+
+| `Ein Spaziergang, _IF("See")_ Eine Bootfahrt` | eligible |
+| --- | --- |
+| `See` defined | `Eine Bootfahrt` only |
+| `See` not defined | `Ein Spaziergang` only |
+
+If that leaves nothing to pick, the row behaves like `_NONE_`: its placeholder is removed, but the row keeps its index, so the numbering of all following rows stays put.
+
+### AND / OR
+
+Names inside one tag are ANDed, separate tags are ORed:
+
+```
+_IF("See" "Meer")_ needs both
+_IF("See")_ _IF("Meer")_ needs either
+```
+
+`_DEFINE("a" "b")_` likewise defines several names at once. Names may be quoted or bare words (`_IF(See)_`), the same as option texts in `_CHANCE(...)_`.
+
+### With `_NODE(...)_`
+
+Combining the two works: the pre-queue pass that resolves `_NODE(...)_` walks the same `defines` chain, so the LoRA a gated candidate activates matches the text that candidate produces.
 
 ## Uniqueness
 

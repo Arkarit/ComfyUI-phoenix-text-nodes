@@ -1,8 +1,11 @@
 import random
 import re
+from typing import NamedTuple
 
 import server
 from aiohttp import web
+
+from .defines import DEFINES_TYPE, normalize_defines
 
 UNIQUE_KEYWORD = "_UNIQUE_"
 NONE_KEYWORD = "_NONE_"
@@ -10,11 +13,72 @@ WEIGHT_PATTERN = re.compile(r"_(\d+(?:\.\d+)?)_")
 NODE_TAG_PATTERN = re.compile(r"_NODE\(([^)]*)\)_")
 NOTNODE_TAG_PATTERN = re.compile(r"_NOTNODE\(([^)]*)\)_")
 TAG_PREFIX_PATTERN = re.compile(
-    r"^\s*(?:(?:_\d+(?:\.\d+)?_|_NODE\([^)]*\)_|_NOTNODE\([^)]*\)_)\s*)*$"
+    r"^\s*(?:(?:_\d+(?:\.\d+)?_|_NODE\([^)]*\)_|_NOTNODE\([^)]*\)_"
+    r"|_DEFINE\(.*?\)_|_IF\(.*?\)_)\s*)*$"
 )
 CHANCE_OPEN = "_CHANCE("
+DEFINE_OPEN = "_DEFINE("
+IF_OPEN = "_IF("
 CHANCE_NUMBER_PATTERN = re.compile(r"\d+(?:\.\d+)?|\.\d+")
 CHANCE_PLACEHOLDER_PATTERN = re.compile("[ \\t]*\x00CH(\\d+)\x00")
+
+
+def _scan_token(text, start):
+    """Scans a single token at text[start]: either a quoted string — a
+    doubled quote ("") inside it escapes a literal quote, matching
+    _split_csv_row's own convention — or, for a plain single word, a bare
+    run of characters up to the next whitespace or ')'. Returns
+    (end_index, token), or (end_index, None) when there is no token here
+    (an empty bare word, or a quote that is never closed).
+
+    Shared by _scan_chance_block and _scan_name_block so that a name in
+    _DEFINE(...)_/_IF(...)_ may be written exactly like an option text in
+    _CHANCE(...)_."""
+    n = len(text)
+    i = start
+    if i < n and text[i] == '"':
+        i += 1
+        buf = []
+        while i < n:
+            c = text[i]
+            if c == '"':
+                if i + 1 < n and text[i + 1] == '"':
+                    buf.append('"')
+                    i += 2
+                    continue
+                return i + 1, "".join(buf)
+            buf.append(c)
+            i += 1
+        return i, None
+    j = i
+    while j < n and not text[j].isspace() and text[j] != ')':
+        j += 1
+    if j == i:
+        return i, None
+    return j, text[i:j]
+
+
+def _scan_name_block(text, start, opener):
+    """text[start:] must begin with opener (_DEFINE( or _IF( ). Scans
+    whitespace-separated names — each either quoted or a bare word, see
+    _scan_token — until the terminating )_. Returns (end_index, names),
+    end_index being just past the closing )_. Like _scan_chance_block,
+    malformed input simply stops parsing where it is rather than raising,
+    returning whatever was reached so far."""
+    n = len(text)
+    i = start + len(opener)
+    names = []
+    while i < n:
+        while i < n and text[i].isspace():
+            i += 1
+        if i + 1 < n and text[i] == ')' and text[i + 1] == '_':
+            return i + 2, names
+        end, token = _scan_token(text, i)
+        if token is None:
+            return end, names
+        names.append(token)
+        i = end
+    return i, names
 
 
 def _scan_chance_block(text, start):
@@ -47,33 +111,11 @@ def _scan_chance_block(text, start):
         i = match.end()
         while i < n and text[i].isspace():
             i += 1
-        if i < n and text[i] == '"':
-            i += 1
-            buf = []
-            closed = False
-            while i < n:
-                c = text[i]
-                if c == '"':
-                    if i + 1 < n and text[i + 1] == '"':
-                        buf.append('"')
-                        i += 2
-                        continue
-                    i += 1
-                    closed = True
-                    break
-                buf.append(c)
-                i += 1
-            if not closed:
-                return i, pairs
-            pairs.append((weight, "".join(buf)))
-        else:
-            j = i
-            while j < n and not text[j].isspace() and text[j] != ')':
-                j += 1
-            if j == i:
-                return i, pairs
-            pairs.append((weight, text[i:j]))
-            i = j
+        end, token = _scan_token(text, i)
+        if token is None:
+            return end, pairs
+        pairs.append((weight, token))
+        i = end
     return i, pairs
 
 
@@ -84,10 +126,11 @@ def _split_csv_row(line):
     csv module only treats a quote as special at the very start of a
     field, so a tag placed before a quoted field containing a comma would
     otherwise cause csv to split the field in the wrong place. A
-    _CHANCE(...)_ block (see _scan_chance_block) is likewise copied
+    _CHANCE(...)_ block (see _scan_chance_block), and likewise a
+    _DEFINE(...)_/_IF(...)_ block (see _scan_name_block), is copied
     through verbatim as a single unit regardless of where in the field
-    it appears, so the commas inside its own quoted option texts don't
-    get mistaken for field separators either."""
+    it appears, so the commas inside their own quoted texts don't get
+    mistaken for field separators either."""
     fields = []
     buf = []
     in_quotes = False
@@ -114,6 +157,12 @@ def _split_csv_row(line):
             continue
         if line.startswith(CHANCE_OPEN, i):
             end, _ = _scan_chance_block(line, i)
+            buf.append(line[i:end])
+            i = end
+            continue
+        if line.startswith(DEFINE_OPEN, i) or line.startswith(IF_OPEN, i):
+            opener = DEFINE_OPEN if line.startswith(DEFINE_OPEN, i) else IF_OPEN
+            end, _ = _scan_name_block(line, i, opener)
             buf.append(line[i:end])
             i = end
             continue
@@ -150,6 +199,36 @@ def _extract_chance_blocks(text):
     return "".join(out), specs
 
 
+def _extract_name_blocks(text, opener):
+    """Removes every opener...)_ block from text and returns
+    (text_without_blocks, groups), where groups[i] holds the names of the
+    i-th block in source order. Blocks that turn out to be empty (e.g. a
+    stray _IF()_) are dropped rather than kept as a vacuous group."""
+    groups = []
+    out = []
+    i = 0
+    n = len(text)
+    while i < n:
+        if text.startswith(opener, i):
+            end, names = _scan_name_block(text, i, opener)
+            names = [name for name in (raw.strip() for raw in names) if name]
+            if names:
+                groups.append(names)
+            i = end
+            continue
+        out.append(text[i])
+        i += 1
+    return "".join(out), groups
+
+
+def _if_satisfied(if_groups, defines):
+    """Evaluates a candidate's _IF(...)_ tags against the currently
+    defined names: names inside one tag are ANDed, separate tags are
+    ORed. So _IF("See" "Meer")_ needs both, while _IF("See")_ _IF("Meer")_
+    needs either."""
+    return any(all(name in defines for name in group) for group in if_groups)
+
+
 def _resolve_chance_placeholders(text, specs, rng):
     """Substitutes each CH<i> placeholder left by _extract_chance_blocks
     with one option picked (via the row's own seeded rng) from its
@@ -179,22 +258,42 @@ def _resolve_chance_placeholders(text, specs, rng):
     return CHANCE_PLACEHOLDER_PATTERN.sub(repl, text)
 
 
+class Candidate(NamedTuple):
+    """One parsed CSV candidate. Named rather than a bare tuple because
+    there are enough fields now that positional unpacking stopped being
+    readable."""
+    text: str
+    weight: float
+    node_names: list
+    notnode_names: list
+    chance_specs: list
+    define_names: list
+    if_groups: list
+
+
 def _parse_candidate(candidate):
-    """Splits a candidate like '_NODE(A)_ _NOTNODE(B)_ _2_ "blue, thick"
-    _CHANCE(.2 "with scars" .3 " with fish scales")_' into its display
-    text "blue, thick" (its _CHANCE(...)_ block(s) left as unresolved
-    NUL-delimited placeholders — see _extract_chance_blocks/
-    _resolve_chance_placeholders — since which option they resolve to
-    depends on whether this very candidate ends up picked), its weight
-    2.0 (default 1.0 without a _NUMBER_ token), the node names tagged on
-    it via _NODE(...)_, e.g. ["A"], and the node names tagged on it via
-    _NOTNODE(...)_, e.g. ["B"] (a candidate can carry any number of
-    either tag, or none). _CHANCE(...)_ blocks are extracted first, so
-    the quotes/commas/whitespace inside them never confuse the
-    _NODE/_NOTNODE/weight parsing or the outer quote-stripping below
-    (which is mostly a defensive fallback, since quotes around the
+    """Splits a candidate like '_NODE(A)_ _NOTNODE(B)_ _IF("See")_ _2_
+    "blue, thick" _CHANCE(.2 "with scars" .3 " with fish scales")_' into a
+    Candidate: its display text "blue, thick" (its _CHANCE(...)_ block(s)
+    left as unresolved NUL-delimited placeholders — see
+    _extract_chance_blocks/_resolve_chance_placeholders — since which
+    option they resolve to depends on whether this very candidate ends up
+    picked), its weight 2.0 (default 1.0 without a _NUMBER_ token), the
+    node names tagged on it via _NODE(...)_, e.g. ["A"], those tagged via
+    _NOTNODE(...)_, e.g. ["B"], the variable names it defines when picked
+    via _DEFINE(...)_, and the _IF(...)_ condition groups gating it (see
+    _if_satisfied). A candidate can carry any number of each tag, or none.
+
+    _CHANCE(...)_ blocks are extracted first, so the quotes/commas/
+    whitespace inside them never confuse the rest of the parsing, and the
+    _DEFINE/_IF blocks are pulled out next for the same reason — their
+    own quoted names would otherwise reach the outer quote-stripping
+    below (which is mostly a defensive fallback, since quotes around the
     display text are already stripped by _split_csv_row)."""
     text, chance_specs = _extract_chance_blocks(candidate)
+    text, define_groups = _extract_name_blocks(text, DEFINE_OPEN)
+    text, if_groups = _extract_name_blocks(text, IF_OPEN)
+    define_names = [name for group in define_groups for name in group]
     node_names = [name.strip() for name in NODE_TAG_PATTERN.findall(text) if name.strip()]
     notnode_names = [name.strip() for name in NOTNODE_TAG_PATTERN.findall(text) if name.strip()]
     text = NOTNODE_TAG_PATTERN.sub("", text)
@@ -208,7 +307,8 @@ def _parse_candidate(candidate):
     text = text.strip()
     if len(text) >= 2 and text[0] == '"' and text[-1] == '"':
         text = text[1:-1]
-    return text, weight, node_names, notnode_names, chance_specs
+    return Candidate(text, weight, node_names, notnode_names, chance_specs,
+                     define_names, if_groups)
 
 
 CONTINUATION_PREFIX = ","
@@ -256,10 +356,11 @@ def _join_continuation_lines(terms):
     return lines
 
 
-def _process_rows(terms, seed, unique):
+def _process_rows(terms, seed, unique, defines=None):
     """Parses terms and picks one candidate per row exactly like
     PhoenixRandomCSVTextReplace.replace() does, for rows that have
-    candidates. Returns a list of per-row dicts: 'text' (the picked
+    candidates. Returns (rows, defined): a list of per-row dicts, and the
+    set of variable names in effect after the last row. Returns per row: 'text' (the picked
     term), 'node_names' (the picked candidate's _NODE(...)_ tags),
     'notnode_names' (the picked candidate's _NOTNODE(...)_ tags),
     'pos_universe' (every node name tagged via _NODE(...)_ anywhere in
@@ -280,8 +381,21 @@ def _process_rows(terms, seed, unique):
 
     Source lines are first run through _join_continuation_lines(), so a
     line starting with a comma continues the previous content line
-    instead of forming a row of its own."""
+    instead of forming a row of its own.
+
+    `defines` seeds the set of defined variable names (normally whatever
+    arrived on the node's `defines` input). A picked candidate's
+    _DEFINE(...)_ names are added to that set as rows are processed, so a
+    later row in the same node already sees what an earlier row defined.
+
+    _IF(...)_ gating is exclusive: in a row where at least one candidate's
+    condition is satisfied, ONLY the satisfied candidates can be picked;
+    otherwise only the candidates carrying no _IF(...)_ at all can. If
+    that leaves nothing to pick, the row behaves like _NONE_ — its
+    placeholder is removed but the row still occupies its index, so the
+    placeholder numbering of every following row stays put."""
     rng = random.Random(seed)
+    defined = normalize_defines(defines)
     used = set()
     rows_out = []
     for line in _join_continuation_lines(terms):
@@ -295,36 +409,44 @@ def _process_rows(terms, seed, unique):
             continue
 
         parsed = [_parse_candidate(c) for c in candidates]
-        pos_universe = sorted({name for _, _, names, _, _ in parsed for name in names})
-        neg_universe = sorted({name for _, _, _, names, _ in parsed for name in names})
+        pos_universe = sorted({name for p in parsed for name in p.node_names})
+        neg_universe = sorted({name for p in parsed for name in p.notnode_names})
 
         if candidates == [NONE_KEYWORD]:
-            choice_text, choice_names, choice_notnode_names, choice_chance_specs = "", [], [], []
+            eligible = []
         else:
-            pool = parsed
+            eligible = [p for p in parsed if p.if_groups and _if_satisfied(p.if_groups, defined)]
+            if not eligible:
+                eligible = [p for p in parsed if not p.if_groups]
+
+        if not eligible:
+            choice = None
+        else:
+            pool = eligible
             if row_unique:
-                remaining = [p for p in parsed if p[0] not in used]
+                remaining = [p for p in pool if p.text not in used]
                 if remaining:
                     pool = remaining
-            choice_text, _, choice_names, choice_notnode_names, choice_chance_specs = rng.choices(
-                pool, weights=[w for _, w, _, _, _ in pool], k=1
-            )[0]
+            choice = rng.choices(pool, weights=[p.weight for p in pool], k=1)[0]
             if row_unique:
-                used.add(choice_text)
+                used.add(choice.text)
+            defined = defined | frozenset(choice.define_names)
 
-        choice_text = _resolve_chance_placeholders(choice_text, choice_chance_specs, rng)
+        choice_text = _resolve_chance_placeholders(
+            choice.text if choice else "", choice.chance_specs if choice else [], rng
+        )
 
         rows_out.append({
             "text": choice_text,
-            "node_names": choice_names,
-            "notnode_names": choice_notnode_names,
+            "node_names": choice.node_names if choice else [],
+            "notnode_names": choice.notnode_names if choice else [],
             "pos_universe": pos_universe,
             "neg_universe": neg_universe,
         })
-    return rows_out
+    return rows_out, defined
 
 
-def _resolve_node_toggles(terms, seed, unique):
+def _resolve_node_toggles(terms, seed, unique, defines=None):
     """Resolves which _NODE(name)_/_NOTNODE(name)_-tagged nodes should be
     active vs. bypassed for a run.
 
@@ -341,9 +463,17 @@ def _resolve_node_toggles(terms, seed, unique):
     (positive or negative), that decides it directly. Otherwise the
     default above applies, based on how name was tagged elsewhere in the
     row. Rows are applied in order, so a name mentioned in more than one
-    row takes its state from the last row that mentions it."""
+    row takes its state from the last row that mentions it.
+
+    `defines` seeds the variable set for _IF(...)_ gating, exactly as in
+    _process_rows. Returns (state, defined) so a caller resolving several
+    chained nodes can thread the resulting set into the next one — the
+    /phoenix/random_csv_node_toggles endpoint does precisely that, since
+    the pre-queue pass has to arrive at the same picks the Python run
+    will."""
     state = {}
-    for row in _process_rows(terms, seed, unique):
+    rows, defined = _process_rows(terms, seed, unique, defines)
+    for row in rows:
         chosen_pos = set(row["node_names"])
         chosen_neg = set(row["notnode_names"])
         for name in row["pos_universe"]:
@@ -360,7 +490,7 @@ def _resolve_node_toggles(terms, seed, unique):
                 state[name] = False
             elif name not in row["pos_universe"]:
                 state[name] = True
-    return state
+    return state, defined
 
 
 def _substitute_placeholders(text, search_string, start_index, terms):
@@ -391,12 +521,16 @@ def _substitute_placeholders(text, search_string, start_index, terms):
 @server.PromptServer.instance.routes.post("/phoenix/random_csv_node_toggles")
 async def _random_csv_node_toggles_route(request):
     data = await request.json()
-    state = _resolve_node_toggles(
+    incoming = normalize_defines(data.get("defines", []))
+    state, defined = _resolve_node_toggles(
         data.get("terms", ""),
         int(data.get("seed", 0)),
         bool(data.get("unique", False)),
+        incoming,
     )
-    return web.json_response(state)
+    if not data.get("pass_through", True):
+        defined = defined - incoming
+    return web.json_response({"toggles": state, "defines": sorted(defined)})
 
 
 class PhoenixRandomCSVTextReplace:
@@ -417,6 +551,12 @@ class PhoenixRandomCSVTextReplace:
     of the previous content line rather than a row of its own, so a long
     row can be split over several source lines for readability; blank and
     comment lines in between do not break the continuation.
+    A candidate tagged _DEFINE("name")_ defines that variable when it is
+    picked; _IF("name")_ gates a candidate on it. Variables arrive on the
+    optional `defines` input and leave on the `defines` output, so the
+    dependency between two nodes is an explicit link. Gating is exclusive
+    and a row left with no eligible candidate behaves like _NONE_ — see
+    _process_rows.
 
     Rows are independent by default, so the same term can be picked for
     more than one placeholder. Set 'unique' to make every row avoid terms
@@ -479,7 +619,7 @@ class PhoenixRandomCSVTextReplace:
         "Replaces sequential placeholders ($1, $2, ...) in a text with a "
         "random term picked from a per-placeholder candidate list, with "
         "several optional keywords for advanced control (uniqueness, "
-        "weighting, node activation, nested chance picks). See this "
+        "weighting, node activation, nested chance picks, conditions). See this "
         "node's Info tab (Properties Panel) for full details."
     )
     OUTPUT_NODE = True
@@ -514,6 +654,10 @@ class PhoenixRandomCSVTextReplace:
                         "A line whose first non-blank character is a comma continues the previous "
                         "line instead of starting a row, so a long row can be split over several "
                         "lines (blank/comment lines in between do not break it). "
+                        "_DEFINE(\"name\")_ on a candidate defines that variable when the candidate "
+                        "is picked; _IF(\"name\")_ gates a candidate on it. Gating is exclusive: if any "
+                        "candidate in a row matches, only the matching ones can be picked. Names in one "
+                        "_IF(...)_ are ANDed, separate _IF(...)_ tags are ORed. "
                         "Add the field _UNIQUE_ to a row to make just that row avoid terms already picked by "
                         "another unique row this run (it's removed before picking, not a candidate itself). "
                         "A row containing only _NONE_ removes its placeholder from the output instead of "
@@ -554,19 +698,38 @@ class PhoenixRandomCSVTextReplace:
                     "multiline": True, "default": "",
                     "tooltip": "Read-only preview of the last result. Not an input; updates after each run.",
                 }),
+                "defines": (DEFINES_TYPE, {
+                    "tooltip": (
+                        "Variable names defined by earlier nodes, for _IF(...)_ to test against. "
+                        "Leave unconnected if this node defines but never tests."
+                    ),
+                }),
+                "pass_through_defines": ("BOOLEAN", {
+                    "default": True,
+                    "tooltip": (
+                        "Forward the incoming defines to the defines output alongside this "
+                        "node's own. Turn off to start a fresh scope, emitting only what this "
+                        "node defines itself."
+                    ),
+                }),
             },
         }
 
-    RETURN_TYPES = ("STRING", "STRING")
-    RETURN_NAMES = ("text", "replaced_text")
+    RETURN_TYPES = ("STRING", "STRING", DEFINES_TYPE)
+    RETURN_NAMES = ("text", "replaced_text", "defines")
     FUNCTION = "replace"
     CATEGORY = "phoenix/text"
 
-    def replace(self, text, search_string, start_index, terms, seed, unique=False, preview=""):
-        replaced = [row["text"] for row in _process_rows(terms, seed, unique)]
+    def replace(self, text, search_string, start_index, terms, seed, unique=False,
+                preview="", defines=None, pass_through_defines=True):
+        incoming = normalize_defines(defines)
+        rows, defined = _process_rows(terms, seed, unique, incoming)
+        replaced = [row["text"] for row in rows]
         result = _substitute_placeholders(text, search_string, start_index, replaced)
         replaced_text = "\n".join(replaced)
-        return {"ui": {"text": [result]}, "result": (result, replaced_text)}
+        if not pass_through_defines:
+            defined = defined - incoming
+        return {"ui": {"text": [result]}, "result": (result, replaced_text, defined)}
 
 
 NODE_CLASS_MAPPINGS = {

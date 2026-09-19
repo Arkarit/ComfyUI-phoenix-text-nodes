@@ -97,9 +97,64 @@ function widgetValue(node, name) {
 	return undefined;
 }
 
-async function resolveToggles(node) {
+// A node's "defines" input, resolved back to the RandomCSV node feeding
+// it (through virtual pass-through nodes, so routing defines via KJNodes'
+// SetNode/GetNode works the same way a routed seed does). Returns null
+// when nothing, or nothing of this type, is wired in.
+function definesOrigin(node) {
+	const slotIndex = node.inputs?.findIndex((i) => i.name === "defines");
+	if (slotIndex == null || slotIndex < 0 || node.inputs[slotIndex].link == null) {
+		return null;
+	}
+	const origin = resolveRealOrigin(node, slotIndex);
+	return origin?.node?.type === NODE_TYPE ? origin.node : null;
+}
+
+// Orders the nodes so that one feeding another's "defines" input comes
+// first. Canvas order (app.graph._nodes) says nothing about execution
+// order, but _IF(...)_ has to see what an upstream _DEFINE(...)_ set, so
+// the pre-queue pass must walk the same chain the executor will.
+function orderByDefinesChain(nodes) {
+	const ids = new Set(nodes.map((n) => n.id));
+	const upstream = new Map();
+	for (const node of nodes) {
+		const up = definesOrigin(node);
+		upstream.set(node.id, up && ids.has(up.id) ? up.id : null);
+	}
+	const ordered = [];
+	const done = new Set();
+	let remaining = [...nodes];
+	while (remaining.length) {
+		const ready = remaining.filter((n) => {
+			const up = upstream.get(n.id);
+			return up == null || done.has(up);
+		});
+		if (!ready.length) {
+			// Can only happen if the defines links form a cycle, which the
+			// graph shouldn't allow. Emit the rest as-is rather than hang.
+			console.warn("Phoenix Random CSV Text Replace: cycle in the defines chain, falling back to canvas order.");
+			ordered.push(...remaining);
+			break;
+		}
+		for (const node of ready) {
+			ordered.push(node);
+			done.add(node.id);
+		}
+		remaining = remaining.filter((n) => !done.has(n.id));
+	}
+	return { ordered, upstream };
+}
+
+function passesThrough(node) {
+	return widgetValue(node, "pass_through_defines") !== false;
+}
+
+async function resolveToggles(node, definesIn) {
 	const terms = widgetValue(node, "terms");
-	if (typeof terms !== "string" || (!terms.includes("_NODE(") && !terms.includes("_NOTNODE("))) {
+	const tagged =
+		typeof terms === "string" &&
+		(terms.includes("_NODE(") || terms.includes("_NOTNODE(") || terms.includes("_DEFINE(") || terms.includes("_IF("));
+	if (!tagged) {
 		return null;
 	}
 	const seed = widgetValue(node, "seed");
@@ -114,7 +169,7 @@ async function resolveToggles(node) {
 		const response = await api.fetchApi(ENDPOINT, {
 			method: "POST",
 			headers: { "Content-Type": "application/json" },
-			body: JSON.stringify({ terms, seed, unique }),
+			body: JSON.stringify({ terms, seed, unique, defines: definesIn, pass_through: passesThrough(node) }),
 		});
 		return await response.json();
 	} catch (err) {
@@ -134,11 +189,20 @@ async function applyNodeToggles() {
 	);
 	// Later nodes (and later rows within one node, resolved server-side)
 	// override earlier ones for the same name.
+	const { ordered, upstream } = orderByDefinesChain(sourceNodes);
 	const state = {};
-	for (const node of sourceNodes) {
-		const result = await resolveToggles(node);
+	const definesById = new Map();
+	for (const node of ordered) {
+		const upId = upstream.get(node.id);
+		const definesIn = (upId != null ? definesById.get(upId) : null) || [];
+		const result = await resolveToggles(node, definesIn);
 		if (result) {
-			Object.assign(state, result);
+			Object.assign(state, result.toggles);
+			definesById.set(node.id, result.defines || []);
+		} else {
+			// Nothing to resolve for this node (no tags, or a seed we couldn't
+			// read). It still sits in the chain, so hand its input set on.
+			definesById.set(node.id, passesThrough(node) ? definesIn : []);
 		}
 	}
 	console.debug(`[Phoenix NodeToggle #${callId}] resolved state:`, state);
