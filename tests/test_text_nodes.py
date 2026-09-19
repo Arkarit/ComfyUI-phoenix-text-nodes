@@ -81,6 +81,39 @@ class CSVTests(unittest.TestCase):
     def test_only_picked_candidate_defines_names(self):
         self.assertEqual(self.run_node('_0_ no _DEFINE(no)_,yes _DEFINE(yes)_')[2], {"yes"})
 
+    def test_ifnot_conditions(self):
+        cases = [
+            ('fallback,_IFNOT(See)_ walk', None, 'walk|$2|$3'),
+            ('fallback,_IFNOT(See)_ walk', {'See'}, 'fallback|$2|$3'),
+            ('_IF(See)_ boat,_IFNOT(See)_ walk', {'See'}, 'boat|$2|$3'),
+            ('_IF(See)_ boat,_IFNOT(See)_ walk', None, 'walk|$2|$3'),
+            ('_IFNOT(See)_ walk\nnext', {'See'}, '|next|$3'),
+            ('fallback,_IFNOT(a b)_ yes', None, 'yes|$2|$3'),
+            ('fallback,_IFNOT(a b)_ yes', {'a'}, 'fallback|$2|$3'),
+            ('fallback,_IFNOT(a)_ _IFNOT(b)_ yes', {'a'}, 'yes|$2|$3'),
+            ('fallback,_IF(a)_ _IFNOT(b)_ yes', {'b'}, 'fallback|$2|$3'),
+            ('fallback,_IF(a)_ _IFNOT(b)_ yes', {'a', 'b'}, 'yes|$2|$3'),
+            ('fallback,_IF(a)_ _IFNOT(b)_ yes', None, 'yes|$2|$3'),
+            ('rain _DEFINE(See)_\n_IFNOT(See)_ walk\nlast', None, 'rain||last'),
+            ('_IFNOT("nass, kalt")_ "dry, warm"', None, 'dry, warm|$2|$3'),
+            ('_IFNOT("nass, kalt")_ "dry, warm"', {'nass, kalt'}, '|$2|$3'),
+        ]
+        for terms, incoming, expected in cases:
+            with self.subTest(terms=terms, incoming=incoming):
+                self.assertEqual(self.run_node(terms, incoming)[0], expected)
+
+    def test_ifnot_endpoint_matches_execution(self):
+        terms = '_IFNOT(See)_ walk _DEFINE(Land)_ _NODE(Lora)_,_IF(See)_ boat _NOTNODE(Lora)_'
+        for incoming in ([], ['See']):
+            for seed in range(20):
+                async def json():
+                    return dict(terms=terms, seed=seed, defines=incoming, pass_through=False)
+                response = asyncio.run(csv._random_csv_node_toggles_route(types.SimpleNamespace(json=json)))
+                result = self.run_node(terms, incoming, False, seed)
+                self.assertEqual(response['toggles'], {'Lora': not bool(incoming)})
+                self.assertEqual(set(response['defines']), result[2])
+                self.assertEqual(result[1], 'boat' if incoming else 'walk')
+
     def test_continuations_comments_and_none(self):
         terms = '_0_ red\n# comment\n\n,blue\n_NONE_\nlast'
         self.assertEqual(self.run_node(terms)[:2], ("blue||last", "blue\n\nlast"))

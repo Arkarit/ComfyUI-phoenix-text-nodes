@@ -62,5 +62,24 @@ export async function runTests(source) {
 		equal(requests.at(-1).defines, bypass ? ["See"] : middleModes[0] === 0 ? ["other"] : []);
 		equal(requests.length, middleModes[0] === 0 ? 3 : 2);
 	}
+	// IFNOT alone must trigger the pre-queue API call too, even without
+	// DEFINE/IF/NODE tags that would independently activate the resolver.
+	let extension;
+	const requests = [];
+	const sourceNode = { id: 1, mode: 0, type: "PhoenixRandomCSVTextReplace", inputs: [],
+		widgets: [{ name: "terms", value: "_IFNOT(See)_ walk" },
+			{ name: "seed", value: 0 }, { name: "unique", value: false }] };
+	const app = { graph: { _nodes: [sourceNode] }, registerExtension(e) { extension = e; },
+		async graphToPrompt() {} };
+	const api = { async fetchApi(url, options) {
+		requests.push(JSON.parse(options.body));
+		return { async json() { return { toggles: {}, defines: [] }; } };
+	} };
+	new Function("app", "api", "console", "performance", source.replace(/^import .*;\s*$/gm, ""))(
+		app, api, { debug() {}, warn() {} }, { now: () => 0 });
+	await extension.setup();
+	await app.graphToPrompt();
+	equal(requests.length, 1);
+	equal(requests[0].terms, "_IFNOT(See)_ walk");
 	return checks;
 }

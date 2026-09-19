@@ -41,8 +41,9 @@ A continuation line with no content line before it has nothing to attach to and 
 | `_CHANCE(...)_` | Nested weighted pick, resolved only if this candidate is picked. |
 | `_DEFINE("name")_` | Defines `name` when this candidate is picked. |
 | `_IF("name")_` | Gates this candidate on `name` being defined (exclusive, see below). |
+| `_IFNOT("name")_` | Gates this candidate on `name` being absent (same exclusive selection). |
 
-## Conditions: `_DEFINE` and `_IF`
+## Conditions: `_DEFINE`, `_IF` and `_IFNOT`
 
 A candidate can define a variable when it is picked, and candidates elsewhere can be gated on it.
 
@@ -52,6 +53,16 @@ Row in a later node:    Ein Spaziergang, _IF("See")_ Eine Bootfahrt
 ```
 
 If `See` is picked in the first node, the second row can only pick `Eine Bootfahrt`; otherwise only `Ein Spaziergang`.
+
+Use `_IFNOT` to explicitly require a missing definition:
+
+```
+_IF("See")_ Eine Bootfahrt, _IFNOT("See")_ Ein Spaziergang
+```
+
+With `See` defined, this picks `Eine Bootfahrt`; without it, `Ein Spaziergang`.
+This also works with definitions from earlier rows of the same node and with
+`_NODE(...)_` / `_NOTNODE(...)_` tags.
 
 ### Wiring it up
 
@@ -71,7 +82,7 @@ Within a single node no link is needed — rows are processed top to bottom, so 
 
 ### Gating is exclusive
 
-In a row where **at least one** candidate's condition is satisfied, only the satisfied candidates can be picked. If none is satisfied, only the candidates carrying no `_IF(...)_` at all can be.
+In a row where **at least one** candidate's condition is satisfied, only the satisfied candidates can be picked. If none is satisfied, only candidates carrying neither `_IF(...)_` nor `_IFNOT(...)_` can be.
 
 | `Ein Spaziergang, _IF("See")_ Eine Bootfahrt` | eligible |
 | --- | --- |
@@ -87,7 +98,13 @@ Names inside one tag are ANDed, separate tags are ORed:
 ```
 _IF("See" "Meer")_ needs both
 _IF("See")_ _IF("Meer")_ needs either
+_IFNOT("See" "Meer")_ needs both to be absent
+_IFNOT("See")_ _IFNOT("Meer")_ needs at least one to be absent
+_IF("See")_ _IFNOT("Regen")_ needs See present OR Regen absent
 ```
+
+Separate tags always mean OR, even when mixing `_IF` and `_IFNOT`.
+In particular, `_IF(a)_ _IFNOT(a)_` is always satisfied.
 
 `_DEFINE("a" "b")_` likewise defines several names at once. Names may be quoted or bare words (`_IF(See)_`), the same as option texts in `_CHANCE(...)_`.
 

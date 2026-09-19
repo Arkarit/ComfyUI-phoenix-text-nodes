@@ -163,7 +163,7 @@ async function resolveToggles(node, definesIn) {
 	const terms = widgetValue(node, "terms");
 	const tagged =
 		typeof terms === "string" &&
-		(terms.includes("_NODE(") || terms.includes("_NOTNODE(") || terms.includes("_DEFINE(") || terms.includes("_IF("));
+		(terms.includes("_NODE(") || terms.includes("_NOTNODE(") || terms.includes("_DEFINE(") || terms.includes("_IF(") || terms.includes("_IFNOT("));
 	if (!tagged) {
 		return null;
 	}

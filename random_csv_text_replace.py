@@ -14,11 +14,12 @@ NODE_TAG_PATTERN = re.compile(r"_NODE\(([^)]*)\)_")
 NOTNODE_TAG_PATTERN = re.compile(r"_NOTNODE\(([^)]*)\)_")
 TAG_PREFIX_PATTERN = re.compile(
     r"^\s*(?:(?:_\d+(?:\.\d+)?_|_NODE\([^)]*\)_|_NOTNODE\([^)]*\)_"
-    r"|_DEFINE\(.*?\)_|_IF\(.*?\)_)\s*)*$"
+    r"|_DEFINE\(.*?\)_|_IF(?:NOT)?\(.*?\)_)\s*)*$"
 )
 CHANCE_OPEN = "_CHANCE("
 DEFINE_OPEN = "_DEFINE("
 IF_OPEN = "_IF("
+IFNOT_OPEN = "_IFNOT("
 CHANCE_NUMBER_PATTERN = re.compile(r"\d+(?:\.\d+)?|\.\d+")
 CHANCE_PLACEHOLDER_PATTERN = re.compile("[ \\t]*\x00CH(\\d+)\x00")
 
@@ -32,7 +33,7 @@ def _scan_token(text, start):
     (an empty bare word, or a quote that is never closed).
 
     Shared by _scan_chance_block and _scan_name_block so that a name in
-    _DEFINE(...)_/_IF(...)_ may be written exactly like an option text in
+    _DEFINE(...)_/_IF(...)_/_IFNOT(...)_ may be written exactly like an option text in
     _CHANCE(...)_."""
     n = len(text)
     i = start
@@ -59,7 +60,7 @@ def _scan_token(text, start):
 
 
 def _scan_name_block(text, start, opener):
-    """text[start:] must begin with opener (_DEFINE( or _IF( ). Scans
+    """text[start:] must begin with opener (_DEFINE(, _IF( or _IFNOT( ). Scans
     whitespace-separated names — each either quoted or a bare word, see
     _scan_token — until the terminating )_. Returns (end_index, names),
     end_index being just past the closing )_. Like _scan_chance_block,
@@ -127,7 +128,7 @@ def _split_csv_row(line):
     field, so a tag placed before a quoted field containing a comma would
     otherwise cause csv to split the field in the wrong place. A
     _CHANCE(...)_ block (see _scan_chance_block), and likewise a
-    _DEFINE(...)_/_IF(...)_ block (see _scan_name_block), is copied
+    _DEFINE(...)_/_IF(...)_/_IFNOT(...)_ block (see _scan_name_block), is copied
     through verbatim as a single unit regardless of where in the field
     it appears, so the commas inside their own quoted texts don't get
     mistaken for field separators either."""
@@ -160,8 +161,9 @@ def _split_csv_row(line):
             buf.append(line[i:end])
             i = end
             continue
-        if line.startswith(DEFINE_OPEN, i) or line.startswith(IF_OPEN, i):
-            opener = DEFINE_OPEN if line.startswith(DEFINE_OPEN, i) else IF_OPEN
+        opener = next((tag for tag in (DEFINE_OPEN, IF_OPEN, IFNOT_OPEN)
+                       if line.startswith(tag, i)), None)
+        if opener is not None:
             end, _ = _scan_name_block(line, i, opener)
             buf.append(line[i:end])
             i = end
@@ -221,12 +223,14 @@ def _extract_name_blocks(text, opener):
     return "".join(out), groups
 
 
-def _if_satisfied(if_groups, defines):
+def _if_satisfied(if_groups, defines, ifnot_groups=()):
     """Evaluates a candidate's _IF(...)_ tags against the currently
     defined names: names inside one tag are ANDed, separate tags are
     ORed. So _IF("See" "Meer")_ needs both, while _IF("See")_ _IF("Meer")_
-    needs either."""
-    return any(all(name in defines for name in group) for group in if_groups)
+    needs either. _IFNOT groups require every named variable to be absent;
+    separate tags, including mixed _IF/_IFNOT tags, are ORed."""
+    return (any(all(name in defines for name in group) for group in if_groups)
+            or any(all(name not in defines for name in group) for group in ifnot_groups))
 
 
 def _resolve_chance_placeholders(text, specs, rng):
@@ -269,6 +273,7 @@ class Candidate(NamedTuple):
     chance_specs: list
     define_names: list
     if_groups: list
+    ifnot_groups: list
 
 
 def _parse_candidate(candidate):
@@ -281,7 +286,7 @@ def _parse_candidate(candidate):
     picked), its weight 2.0 (default 1.0 without a _NUMBER_ token), the
     node names tagged on it via _NODE(...)_, e.g. ["A"], those tagged via
     _NOTNODE(...)_, e.g. ["B"], the variable names it defines when picked
-    via _DEFINE(...)_, and the _IF(...)_ condition groups gating it (see
+    via _DEFINE(...)_, and the _IF/_IFNOT condition groups gating it (see
     _if_satisfied). A candidate can carry any number of each tag, or none.
 
     _CHANCE(...)_ blocks are extracted first, so the quotes/commas/
@@ -293,6 +298,7 @@ def _parse_candidate(candidate):
     text, chance_specs = _extract_chance_blocks(candidate)
     text, define_groups = _extract_name_blocks(text, DEFINE_OPEN)
     text, if_groups = _extract_name_blocks(text, IF_OPEN)
+    text, ifnot_groups = _extract_name_blocks(text, IFNOT_OPEN)
     define_names = [name for group in define_groups for name in group]
     node_names = [name.strip() for name in NODE_TAG_PATTERN.findall(text) if name.strip()]
     notnode_names = [name.strip() for name in NOTNODE_TAG_PATTERN.findall(text) if name.strip()]
@@ -308,7 +314,7 @@ def _parse_candidate(candidate):
     if len(text) >= 2 and text[0] == '"' and text[-1] == '"':
         text = text[1:-1]
     return Candidate(text, weight, node_names, notnode_names, chance_specs,
-                     define_names, if_groups)
+                     define_names, if_groups, ifnot_groups)
 
 
 CONTINUATION_PREFIX = ","
@@ -389,9 +395,9 @@ def _process_rows(terms, seed, unique, defines=None, pass_through_defines=True):
     _DEFINE(...)_ names are added to that set as rows are processed, so a
     later row in the same node already sees what an earlier row defined.
 
-    _IF(...)_ gating is exclusive: in a row where at least one candidate's
+    _IF/_IFNOT gating is exclusive: in a row where at least one candidate's
     condition is satisfied, ONLY the satisfied candidates can be picked;
-    otherwise only the candidates carrying no _IF(...)_ at all can. If
+    otherwise only candidates carrying neither _IF nor _IFNOT can. If
     that leaves nothing to pick, the row behaves like _NONE_ — its
     placeholder is removed but the row still occupies its index, so the
     placeholder numbering of every following row stays put."""
@@ -417,9 +423,9 @@ def _process_rows(terms, seed, unique, defines=None, pass_through_defines=True):
         if candidates == [NONE_KEYWORD]:
             eligible = []
         else:
-            eligible = [p for p in parsed if p.if_groups and _if_satisfied(p.if_groups, defined)]
+            eligible = [p for p in parsed if _if_satisfied(p.if_groups, defined, p.ifnot_groups)]
             if not eligible:
-                eligible = [p for p in parsed if not p.if_groups]
+                eligible = [p for p in parsed if not p.if_groups and not p.ifnot_groups]
 
         if not eligible:
             choice = None
@@ -556,7 +562,8 @@ class PhoenixRandomCSVTextReplace:
     row can be split over several source lines for readability; blank and
     comment lines in between do not break the continuation.
     A candidate tagged _DEFINE("name")_ defines that variable when it is
-    picked; _IF("name")_ gates a candidate on it. Variables arrive on the
+    picked; _IF("name")_ requires it, _IFNOT("name")_ requires its absence.
+    Variables arrive on the
     optional `defines` input and leave on the `defines` output, so the
     dependency between two nodes is an explicit link. Gating is exclusive
     and a row left with no eligible candidate behaves like _NONE_ — see
@@ -661,7 +668,8 @@ class PhoenixRandomCSVTextReplace:
                         "_DEFINE(\"name\")_ on a candidate defines that variable when the candidate "
                         "is picked; _IF(\"name\")_ gates a candidate on it. Gating is exclusive: if any "
                         "candidate in a row matches, only the matching ones can be picked. Names in one "
-                        "_IF(...)_ are ANDed, separate _IF(...)_ tags are ORed. "
+                        "_IF(...)_ are ANDed; _IFNOT(...)_ requires all named variables to be absent. "
+                        "Separate condition tags (including mixed _IF/_IFNOT tags) are ORed. "
                         "Add the field _UNIQUE_ to a row to make just that row avoid terms already picked by "
                         "another unique row this run (it's removed before picking, not a candidate itself). "
                         "A row containing only _NONE_ removes its placeholder from the output instead of "
@@ -704,7 +712,7 @@ class PhoenixRandomCSVTextReplace:
                 }),
                 "defines": (DEFINES_TYPE, {
                     "tooltip": (
-                        "Variable names defined by earlier nodes, for _IF(...)_ to test against. "
+                        "Variable names defined by earlier nodes, for _IF(...)_/_IFNOT(...)_ to test against. "
                         "Leave unconnected if this node defines but never tests."
                     ),
                 }),
