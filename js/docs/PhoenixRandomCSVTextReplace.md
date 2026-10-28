@@ -176,3 +176,32 @@ A candidate may also carry any number of `_CHANCE(...)_` blocks: a nested weight
 - `text` — the input text with placeholders replaced.
 - `replaced_text` — just the picked term for each processed row, one per line in row order (rows with a missing/empty CSV line are skipped, `_NONE_` rows contribute an empty line).
 - A read-only `preview` widget on the node itself shows the last result.
+
+## Debug
+
+Turn on `debug` to append a trace of the run to the `preview` and to `replaced_text` (after an empty line), never to `text`. It doesn't change any pick.
+
+```
+a boat sails red
+
+--- debug ---
+seed: 2  seed_offset: 0  row_seed_step: 1
+row seeds: seed+offset:step:row, hashed into each row's own rng
+defines in: -
+defines out: See
+$1: a  [1/3]
+  seed: 2:1:0
+  nodes on: Lora  off: -
+  define: See
+$2: boat sails red  [1/2]
+  seed: 2:1:1
+  chance: [ ] with scars 0.2  [x] sails 0.3  [ ] (nothing) 0.5
+  chance: [x] red 1
+```
+
+- The header shows `seed`, both offsets, and the defines arriving at the input and leaving at the output.
+- Each row shows its placeholder, the picked term and its position among the row's candidates (`[1/3]`). A `_NONE_` row shows `(_NONE_)`, a row left without an eligible candidate `(nothing eligible)`.
+- `seed:` is the row's own seed with `row_seed_step` above 0, otherwise `shared stream` with the seed the whole node draws from. A row seed like `2:1:0` is text, not arithmetic (`seed+offset:step:row`, as the header line says): Python hashes it (SHA-512) into the row's rng, so rows differing only in the last digit are still unrelated, while the same text always gives the same pick.
+- `nodes on/off` is what this row decides for the `_NODE`/`_NOTNODE` names it mentions; when several rows mention a name, the last one wins.
+- Each `_CHANCE` block of the picked candidate gets its own line, with `[x]` on the option that fired; `(nothing)` is the implicit remainder when the weights sum to less than 1.
+- `nodes`, `chance` and `define` lines only appear for rows that have them.

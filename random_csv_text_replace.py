@@ -233,7 +233,7 @@ def _if_satisfied(if_groups, defines, ifnot_groups=()):
             or any(all(name not in defines for name in group) for group in ifnot_groups))
 
 
-def _resolve_chance_placeholders(text, specs, rng):
+def _resolve_chance_placeholders(text, specs, rng, log=None):
     """Substitutes each CH<i> placeholder left by _extract_chance_blocks
     with one option picked (via the row's own seeded rng) from its
     pairs, weighted exactly like a normal candidate pick: if the pairs'
@@ -248,15 +248,22 @@ def _resolve_chance_placeholders(text, specs, rng):
     dropped first, so authors don't have to worry about doubling it up),
     while a picked empty option inserts nothing at all, not even a
     space — so the surrounding text's own formatting never leaks an
-    extra/missing space into the result either way."""
+    extra/missing space into the result either way.
+
+    If `log` is a list, one (options, picked_index) entry per resolved
+    block is appended to it — options including the implicit padding
+    option — for the debug report. Logging draws nothing extra from rng."""
     def repl(match):
         pairs = specs[int(match.group(1))]
         options = list(pairs)
         total = sum(weight for weight, _ in options)
         if total < 1:
             options.append((1 - total, ""))
-        picked = rng.choices(options, weights=[weight for weight, _ in options], k=1)[0][1]
-        picked = picked.lstrip()
+        picked_index = rng.choices(range(len(options)),
+                                   weights=[weight for weight, _ in options], k=1)[0]
+        if log is not None:
+            log.append((options, picked_index))
+        picked = options[picked_index][1].lstrip()
         return f" {picked}" if picked else ""
 
     return CHANCE_PLACEHOLDER_PATTERN.sub(repl, text)
@@ -439,8 +446,8 @@ def _process_rows(terms, seed, unique, defines=None, pass_through_defines=True,
         # (seed, step, row) combination can land on another's slot: with
         # seed + row * step, row 1 at seed s would equal row 0 at seed s + 1.
         # Python seeds str via SHA-512, independent of PYTHONHASHSEED.
-        row_rng = rng if row_seed_step == 0 else random.Random(
-            f"{base_seed}:{row_seed_step}:{len(rows_out)}")
+        row_seed = None if row_seed_step == 0 else f"{base_seed}:{row_seed_step}:{len(rows_out)}"
+        row_rng = rng if row_seed is None else random.Random(row_seed)
 
         parsed = [_parse_candidate(c) for c in candidates]
         pos_universe = sorted({name for p in parsed for name in p.node_names})
@@ -467,8 +474,9 @@ def _process_rows(terms, seed, unique, defines=None, pass_through_defines=True,
             own_defines = own_defines | frozenset(choice.define_names)
             defined = defined | own_defines
 
+        chances = []
         choice_text = _resolve_chance_placeholders(
-            choice.text if choice else "", choice.chance_specs if choice else [], row_rng
+            choice.text if choice else "", choice.chance_specs if choice else [], row_rng, chances
         )
 
         rows_out.append({
@@ -477,6 +485,13 @@ def _process_rows(terms, seed, unique, defines=None, pass_through_defines=True,
             "notnode_names": choice.notnode_names if choice else [],
             "pos_universe": pos_universe,
             "neg_universe": neg_universe,
+            # Debug report only; none of these feed back into the picks.
+            "index": next(i for i, p in enumerate(parsed) if p is choice) + 1 if choice else None,
+            "count": len(parsed),
+            "none_row": candidates == [NONE_KEYWORD],
+            "row_seed": row_seed,
+            "chances": chances,
+            "define_names": choice.define_names if choice else [],
         })
     # Incoming names remain visible to conditions even when not forwarded.
     # Track local definitions separately so redefining an incoming name survives.
@@ -517,23 +532,77 @@ def _resolve_node_toggles(terms, seed, unique, defines=None, pass_through_define
     rows, defined = _process_rows(terms, seed, unique, defines, pass_through_defines,
                                   seed_offset, row_seed_step)
     for row in rows:
-        chosen_pos = set(row["node_names"])
-        chosen_neg = set(row["notnode_names"])
-        for name in row["pos_universe"]:
-            if name in chosen_pos:
-                state[name] = True
-            elif name in chosen_neg:
-                state[name] = False
-            else:
-                state[name] = False
-        for name in row["neg_universe"]:
-            if name in chosen_pos:
-                state[name] = True
-            elif name in chosen_neg:
-                state[name] = False
-            elif name not in row["pos_universe"]:
-                state[name] = True
+        state.update(_row_toggles(row))
     return state, defined
+
+
+def _row_toggles(row):
+    """The active (True) / bypassed (False) state one processed row sets
+    for each node name it mentions, per the rules in _resolve_node_toggles."""
+    state = {}
+    chosen_pos = set(row["node_names"])
+    chosen_neg = set(row["notnode_names"])
+    for name in row["pos_universe"]:
+        if name in chosen_pos:
+            state[name] = True
+        elif name in chosen_neg:
+            state[name] = False
+        else:
+            state[name] = False
+    for name in row["neg_universe"]:
+        if name in chosen_pos:
+            state[name] = True
+        elif name in chosen_neg:
+            state[name] = False
+        elif name not in row["pos_universe"]:
+            state[name] = True
+    return state
+
+
+def _debug_report(rows, seed, seed_offset, row_seed_step, incoming, defined,
+                  search_string, start_index):
+    """Human-readable trace of one run for the debug widget: a header with
+    the seeds and the defines in/out, then one block per processed row.
+    Node, _CHANCE and define lines only appear for rows that have them."""
+    def names(values):
+        return ", ".join(sorted(values)) or "-"
+
+    lines = [
+        "--- debug ---",
+        f"seed: {seed}  seed_offset: {seed_offset}  row_seed_step: {row_seed_step}",
+    ]
+    if row_seed_step:
+        lines.append("row seeds: seed+offset:step:row, hashed into each row's own rng")
+    lines += [
+        f"defines in: {names(incoming)}",
+        f"defines out: {names(defined)}",
+    ]
+    for i, row in enumerate(rows):
+        if row["index"] is not None:
+            picked = f"{row['text']}  [{row['index']}/{row['count']}]"
+        elif row["none_row"]:
+            picked = "(_NONE_)"
+        else:
+            picked = f"(nothing eligible)  [-/{row['count']}]"
+        lines.append(f"{search_string}{start_index + i}: {picked}")
+        if row["row_seed"] is None:
+            lines.append(f"  seed: shared stream ({seed + seed_offset})")
+        else:
+            lines.append(f"  seed: {row['row_seed']}")
+        toggles = _row_toggles(row)
+        if toggles:
+            on = [name for name, active in toggles.items() if active]
+            off = [name for name, active in toggles.items() if not active]
+            lines.append(f"  nodes on: {names(on)}  off: {names(off)}")
+        for options, picked_index in row["chances"]:
+            parts = [
+                f"{'[x]' if k == picked_index else '[ ]'} {text.strip() or '(nothing)'} {weight:g}"
+                for k, (weight, text) in enumerate(options)
+            ]
+            lines.append("  chance: " + "  ".join(parts))
+        if row["define_names"]:
+            lines.append(f"  define: {names(row['define_names'])}")
+    return "\n".join(lines)
 
 
 def _substitute_placeholders(text, search_string, start_index, terms):
@@ -639,6 +708,10 @@ class PhoenixRandomCSVTextReplace:
     counts processed rows rather than source lines.
     Same seed + same terms + same offsets still always gives the same
     result.
+
+    debug appends a trace of the run (see _debug_report) to the preview
+    and to replaced_text, after an empty line; text never gets it, and
+    it doesn't change any pick.
 
     A candidate may also carry any number of _NODE(nodename)_ tags (e.g.
     "_NODE(A)_ _NODE(B)_ red"), where nodename is the title of another
@@ -800,6 +873,16 @@ class PhoenixRandomCSVTextReplace:
                         "comment or blank line above a row doesn't change its pick."
                     ),
                 }),
+                "debug": ("BOOLEAN", {
+                    "default": False,
+                    "tooltip": (
+                        "Appends a trace of the run to the preview and to replaced_text (never to "
+                        "text): seed, offsets and defines in/out, then per row the picked term with "
+                        "its index (e.g. 7/9), the row's seed, the nodes it switches on/off, its "
+                        "_CHANCE options with the one that fired, and what it defines. Doesn't "
+                        "change any pick."
+                    ),
+                }),
             },
         }
 
@@ -810,14 +893,20 @@ class PhoenixRandomCSVTextReplace:
 
     def replace(self, text, search_string, start_index, terms, seed, unique=False,
                 preview="", defines=None, pass_through_defines=True,
-                seed_offset=0, row_seed_step=0):
+                seed_offset=0, row_seed_step=0, debug=False):
         incoming = normalize_defines(defines)
         rows, defined = _process_rows(terms, seed, unique, incoming, pass_through_defines,
                                       seed_offset, row_seed_step)
         replaced = [row["text"] for row in rows]
         result = _substitute_placeholders(text, search_string, start_index, replaced)
         replaced_text = "\n".join(replaced)
-        return {"ui": {"text": [result]}, "result": (result, replaced_text, defined)}
+        preview_text = result
+        if debug:
+            report = _debug_report(rows, seed, seed_offset, row_seed_step, incoming, defined,
+                                   search_string, start_index)
+            replaced_text = f"{replaced_text}\n\n{report}"
+            preview_text = f"{result}\n\n{report}"
+        return {"ui": {"text": [preview_text]}, "result": (result, replaced_text, defined)}
 
 
 NODE_CLASS_MAPPINGS = {

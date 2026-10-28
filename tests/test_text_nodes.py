@@ -245,5 +245,61 @@ class SeedOffsetTests(unittest.TestCase):
         self.assertEqual(response["defines"], [])
 
 
+
+class DebugTests(unittest.TestCase):
+    TERMS = ('a _DEFINE(See)_ _NODE(Lora)_,b _NOTNODE(Lora)_,c\n'
+             '_IF(See)_ boat _CHANCE(.2 "with scars" .3 sails)_ _CHANCE(1 red)_,car')
+
+    def run_node(self, terms, seed, debug, **kwargs):
+        return csv.PhoenixRandomCSVTextReplace().replace(
+            "$1 $2", "$", 1, terms, seed, debug=debug, **kwargs)
+
+    def test_report_lists_seeds_defines_index_nodes_chances(self):
+        out = self.run_node(self.TERMS, 2, True, row_seed_step=1)
+        self.assertEqual(out["result"][0], "a boat sails red")
+        self.assertEqual(out["result"][1], "a\nboat sails red\n\n" + "\n".join([
+            "--- debug ---",
+            "seed: 2  seed_offset: 0  row_seed_step: 1",
+            "row seeds: seed+offset:step:row, hashed into each row's own rng",
+            "defines in: -",
+            "defines out: See",
+            "$1: a  [1/3]",
+            "  seed: 2:1:0",
+            "  nodes on: Lora  off: -",
+            "  define: See",
+            "$2: boat sails red  [1/2]",
+            "  seed: 2:1:1",
+            "  chance: [ ] with scars 0.2  [x] sails 0.3  [ ] (nothing) 0.5",
+            "  chance: [x] red 1",
+        ]))
+        self.assertEqual(out["ui"]["text"][0],
+                         out["result"][0] + "\n\n" + out["result"][1].split("\n\n", 1)[1])
+
+    def test_shared_stream_none_and_gated_rows(self):
+        out = self.run_node("_NONE_\n_IF(nope)_ x", 3, True, seed_offset=4,
+                            defines={"alt"})
+        # Both rows contribute an empty line before the report.
+        self.assertEqual(out["result"][1], "\n\n\n" + "\n".join([
+            "--- debug ---",
+            "seed: 3  seed_offset: 4  row_seed_step: 0",
+            "defines in: alt",
+            "defines out: alt",
+            "$1: (_NONE_)",
+            "  seed: shared stream (7)",
+            "$2: (nothing eligible)  [-/1]",
+            "  seed: shared stream (7)",
+        ]))
+
+    def test_debug_never_reaches_text_or_changes_picks(self):
+        for seed in range(30):
+            for step in (0, 1):
+                off = self.run_node(self.TERMS, seed, False, row_seed_step=step)
+                on = self.run_node(self.TERMS, seed, True, row_seed_step=step)
+                self.assertEqual(off["ui"]["text"][0], off["result"][0])
+                self.assertEqual(on["result"][0], off["result"][0])
+                self.assertEqual(on["result"][2], off["result"][2])
+                self.assertTrue(on["result"][1].startswith(off["result"][1] + "\n\n--- debug ---\n"))
+
+
 if __name__ == "__main__":
     unittest.main()
