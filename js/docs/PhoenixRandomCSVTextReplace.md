@@ -131,7 +131,7 @@ Example: `red, _2_ green, _0.1_ blue` — `green` comes up twice as often as `re
 
 ## Seed offsets
 
-`seed_offset` shifts the starting seed to `seed + seed_offset`. `row_seed_step` gives each row its own rng derived from `seed + seed_offset + row_index * row_seed_step`. Both default to **0**, which keeps the original single shared stream — an untouched node picks exactly what it picked before.
+`seed_offset` shifts the starting seed to `seed + seed_offset`. `row_seed_step` above 0 gives each row its own rng seeded from (`seed + seed_offset`, `row_seed_step`, `row_index`); different step values give unrelated picks. Both default to **0**, which keeps the original single shared stream — an untouched node picks exactly what it picked before.
 
 The correlation worth knowing about: with one shared stream, two nodes given the same seed (e.g. a global seed distributed through KJNodes' `SetNode`/`GetNode`) start in an identical state, so rows with the same candidate structure pick the same index **every** run. That is why an unrelated row in node B tends to match an unrelated row in node A.
 
@@ -140,13 +140,14 @@ Node A, seed 0:  cat, dog, fox
 Node B, seed 0:  cat, dog, fox      # same structure -> same pick, always
 ```
 
-Setting `row_seed_step` to 1 or more breaks that, because each row draws from its own slot instead of a shared stream. It also makes a row's pick stable when a comment or blank line is inserted above it, since `row_index` counts processed rows rather than source lines.
+Giving each node a different `seed_offset` (or `row_seed_step`) breaks that. Setting `row_seed_step` to 1 or more on its own does not: two nodes with the same seed, offset and step still pick alike. What it does is give each row its own stream instead of a shared one, which makes a row's pick stable when a comment or blank line is inserted above it, since `row_index` counts processed rows rather than source lines.
 
 Determinism is unchanged: same seed + same terms + same offsets always gives the same result.
 
 Two things to keep in mind:
 
-- `row_seed_step = 0` means "shared stream", not "one rng per row". A step of 0 would otherwise give every row the same rng and therefore the same pick.
+- `row_seed_step = 0` means "shared stream", not "one rng per row". Any value above 0 switches to one rng per row; the value only chooses which set of streams. Rows never share a stream with another row, seed or step, so incrementing the seed between runs doesn't replay last run's row picks one row down.
+- `seed_offset` is a plain shift: seed 5 with offset 1 is the same as seed 6 with offset 0. Two nodes with offsets 0 and 1 on an incrementing global seed are therefore one run apart, not unrelated. Pick offsets far apart (e.g. 1000 per node) if that matters.
 - The JS node-toggle extension sends both offsets to the endpoint, so the pre-queue pass resolves against the same rng as the run that follows. If the offsets are read through a virtual pass-through node (KJNodes' `GetNode`/`SetNode`), the extension walks that chain as it already does for a linked `seed`. Values past 2^53 can't be represented exactly as a JS number, so the extension warns instead of silently resolving against a different seed.
 
 ## `_NODE(nodename)_` / `_NOTNODE(nodename)_`

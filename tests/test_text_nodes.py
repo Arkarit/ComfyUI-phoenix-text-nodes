@@ -147,6 +147,8 @@ class CSVTests(unittest.TestCase):
 class SeedOffsetTests(unittest.TestCase):
     """Defaults must be byte-for-byte the legacy single-stream behavior."""
 
+    run_node = CSVTests.run_node
+
     TERMS = 'goose,wizard,astronaut\nmoped,unicycle,tank\n"a forest, at night",downtown,the moon'
 
     def test_defaults_match_the_pre_offset_reference_values(self):
@@ -169,7 +171,23 @@ class SeedOffsetTests(unittest.TestCase):
 
     def test_row_step_above_zero_gives_each_row_its_own_rng(self):
         self.assertEqual(self.run_node("a,b,c\na,b,c\na,b,c", row_seed_step=1)[1],
-                         "c\na\nc")
+                         "c\nc\nc")
+        # A row's pick depends only on its slot, not on what earlier rows
+        # had to choose from.
+        for seed in range(20):
+            self.assertEqual(
+                self.run_node("a,b,c\na,b,c\nx,y,z", seed=seed, row_seed_step=1)[1].splitlines()[2],
+                self.run_node("q\nq,r,s,t,u\nx,y,z", seed=seed, row_seed_step=1)[1].splitlines()[2])
+
+    def test_row_slots_do_not_overlap_across_seeds_or_steps(self):
+        # An additive seed + row * step would make row 1 at seed s replay
+        # row 0 at seed s + 1, and step 2 replay every other row of step 1.
+        terms = "\n".join([",".join(f"t{i}" for i in range(100))] * 3)
+        picks = {(seed, step): self.run_node(terms, seed=seed, row_seed_step=step)[1].splitlines()
+                 for seed in range(40) for step in (1, 2)}
+        replays = sum(picks[seed, 1][1] == picks[seed + 1, 1][0] for seed in range(39))
+        replays += sum(picks[seed, 2][1] == picks[seed, 1][2] for seed in range(40))
+        self.assertLess(replays, 5)
 
     def test_row_index_counts_processed_rows_not_draws_consumed(self):
         # Row 1 here is gated to nothing, so it consumes no draw at all.
@@ -179,11 +197,11 @@ class SeedOffsetTests(unittest.TestCase):
         skipped = self.run_node("_IF(missing)_ hidden\nx,y,z", seed=1, row_seed_step=0)[1].splitlines()[1]
         self.assertNotEqual(drew, skipped)
         for terms in ("a,b,c\nx,y,z", "_IF(missing)_ hidden\nx,y,z"):
-            self.assertEqual(self.run_node(terms, seed=1, row_seed_step=1)[1].splitlines()[1], "z")
+            self.assertEqual(self.run_node(terms, seed=1, row_seed_step=1)[1].splitlines()[1], "y")
 
     def test_comment_and_blank_lines_do_not_shift_a_row_index(self):
         for terms in ("x,y,z\nx,y,z", "x,y,z\n# note\nx,y,z", "x,y,z\n\nx,y,z"):
-            self.assertEqual(self.run_node(terms, row_seed_step=1)[1], "z\nx")
+            self.assertEqual(self.run_node(terms, row_seed_step=1)[1], "z\nz")
 
     def test_chance_blocks_use_the_row_rng_not_the_shared_one(self):
         # Same candidate twice: under the shared stream the second row lands
@@ -192,7 +210,7 @@ class SeedOffsetTests(unittest.TestCase):
         self.assertEqual(self.run_node("red _CHANCE(.2 a .3 b)_\nred _CHANCE(.2 a .3 b)_",
                                        row_seed_step=0)[1], "red\nred b")
         self.assertEqual(self.run_node("red _CHANCE(.2 a .3 b)_\nred _CHANCE(.2 a .3 b)_",
-                                       row_seed_step=1)[1], "red\nred")
+                                       row_seed_step=1)[1], "red b\nred")
 
     def test_endpoint_and_execution_agree_with_offsets(self):
         terms = ('a _DEFINE(See)_ _NODE(Lora)_,b _NOTNODE(Lora)_\n'

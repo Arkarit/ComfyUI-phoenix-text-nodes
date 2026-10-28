@@ -400,13 +400,14 @@ def _process_rows(terms, seed, unique, defines=None, pass_through_defines=True,
     `row_seed_step` = 0 the node keeps its single shared stream, so the
     result is exactly what an unoffset run produced — the defaults are
     byte-for-byte compatible with the previous behavior. With
-    `row_seed_step` > 0 each row gets its own seeded rng derived from
-    (seed + seed_offset + row_index * row_seed_step), where row_index is
-    the index of the row as processed (not the source line number), so a
-    row's pick no longer depends on how many draws earlier rows consumed.
-    That is what breaks the correlation between two nodes sharing one
-    seed, and it keeps a row stable when a comment/blank line is inserted
-    above it. A row that consumes no draw (a _NONE_ row, or one left with
+    `row_seed_step` > 0 each row gets its own rng seeded from
+    (seed + seed_offset, row_seed_step, row_index), where row_index is
+    the index of the row as processed (not the source line number); a
+    different step value selects a different, unrelated set of streams. So a
+    row's pick no longer depends on how many draws earlier rows consumed,
+    and it stays stable when a comment/blank line is inserted above it.
+    Two nodes sharing one seed still pick alike unless their seed_offset
+    or row_seed_step differ. A row that consumes no draw (a _NONE_ row, or one left with
     nothing eligible by gating) still advances row_index, so later rows
     keep their own slot.
 
@@ -434,8 +435,12 @@ def _process_rows(terms, seed, unique, defines=None, pass_through_defines=True,
 
         # row_seed_step == 0 keeps the single shared stream, exactly as
         # before; anything else gives this row its own rng at its own slot.
+        # The slot is seeded from a string rather than a sum, so no
+        # (seed, step, row) combination can land on another's slot: with
+        # seed + row * step, row 1 at seed s would equal row 0 at seed s + 1.
+        # Python seeds str via SHA-512, independent of PYTHONHASHSEED.
         row_rng = rng if row_seed_step == 0 else random.Random(
-            base_seed + len(rows_out) * row_seed_step)
+            f"{base_seed}:{row_seed_step}:{len(rows_out)}")
 
         parsed = [_parse_candidate(c) for c in candidates]
         pos_universe = sorted({name for p in parsed for name in p.node_names})
@@ -621,16 +626,17 @@ class PhoenixRandomCSVTextReplace:
     and blue only a tenth as often as red.
 
     seed_offset shifts the starting seed (seed + seed_offset), and
-    row_seed_step gives each row its own rng derived from
-    (seed + seed_offset + row_index * row_seed_step). Both default to 0,
+    row_seed_step > 0 gives each row its own rng seeded from
+    (seed + seed_offset, row_seed_step, row_index). Both default to 0,
     which keeps the original single shared stream — an untouched node
     picks exactly what it picked before. The correlation worth knowing
     about: with one shared stream, two nodes given the same seed (e.g. a
     global seed distributed through KJNodes' SetNode/GetNode) start in an
     identical state, so rows with the same candidate structure pick the
-    same index every run. row_seed_step breaks that, and it also keeps a
-    row's pick stable when a comment or blank line is inserted above it,
-    because row_index counts processed rows rather than source lines.
+    same index every run. A different seed_offset (or row_seed_step) per
+    node breaks that. row_seed_step > 0 also keeps a row's pick stable
+    when a comment or blank line is inserted above it, because row_index
+    counts processed rows rather than source lines.
     Same seed + same terms + same offsets still always gives the same
     result.
 
@@ -787,8 +793,9 @@ class PhoenixRandomCSVTextReplace:
                     "max": 0xFFFFFFFFFFFFFFFF,
                     "tooltip": (
                         "0 keeps the single shared rng stream (original behavior). Above 0, each "
-                        "row gets its own rng from (seed + seed_offset + row_index * row_seed_step), "
-                        "where row_index counts processed rows, not source lines — so a row's pick "
+                        "row gets its own rng seeded from (seed + seed_offset, row_seed_step, row_index), "
+                        "where row_index counts processed rows, not source lines; different step values "
+                        "give unrelated picks. So a row's pick "
                         "no longer depends on how many draws earlier rows consumed, and inserting a "
                         "comment or blank line above a row doesn't change its pick."
                     ),

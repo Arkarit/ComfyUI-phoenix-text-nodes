@@ -2,13 +2,15 @@
 
 ## Project Structure & Module Organization
 
-Python node implementations live at the repository root, usually one node per snake_case module. `__init__.py` combines node class/display-name mappings and exposes `WEB_DIRECTORY = "js"`. Shared helpers include `defines.py` and `model_clip_text.py`. Browser extensions live in `js/`, node help pages in `js/docs/Phoenix<NodeName>.md`, and the demo workflow image in `examples/demo_workflow.png`. There is currently no test directory.
+Python node implementations live at the repository root, usually one node per snake_case module. `__init__.py` combines node class/display-name mappings and exposes `WEB_DIRECTORY = "js"`. Shared helpers include `defines.py` and `model_clip_text.py`. Browser extensions live in `js/`, node help pages in `js/docs/Phoenix<NodeName>.md`, the demo workflow image in `examples/demo_workflow.png`, and regression tests in `tests/` (see `tests/README.md`).
 
 ## Build, Test, and Development Commands
 
 Use ComfyUI's existing Python environment, with this repository installed under `ComfyUI/custom_nodes/`. The commands below assume its interpreter is available as `python`; otherwise use its explicit path.
 
 - `python -m pip install -r requirements.txt` — install declared dependencies; the file currently contains only comments.
+- `python -m unittest discover -s tests -v` — run the Python regression tests (standard library only, no running ComfyUI needed).
+- `node tests/run_node_toggle.mjs` — run the JS node-toggle tests (Node.js is a development tool, not a node-pack dependency).
 - `python -m compileall -q .` — check Python syntax from this repository; this does not validate ComfyUI integration.
 - `python main.py` — launch ComfyUI from the **ComfyUI root**. Restart after Python changes and refresh the browser after JavaScript changes.
 - `git diff --check` — check pending changes for whitespace errors.
@@ -23,7 +25,7 @@ For a new node, define both mapping dictionaries in its module, import it in `__
 
 ## Testing Guidelines
 
-No automated testing framework or coverage threshold is configured. Validate affected nodes in ComfyUI with a small reproducible workflow. Check empty inputs, optional sockets, bypass behavior, and existing saved workflows as relevant. For random selection changes, use fixed seeds; for save nodes, verify filenames and paired outputs in a temporary destination. Document validation steps and results in the PR.
+Run both test suites above before committing and extend them when changing node logic or the JS extensions; there is no coverage threshold. The tests stub ComfyUI's server boundary, so also validate affected nodes in ComfyUI with a small reproducible workflow. Check empty inputs, optional sockets, bypass behavior, and existing saved workflows as relevant. For random selection changes, use fixed seeds; for save nodes, verify filenames and paired outputs in a temporary destination. Document validation steps and results in the PR.
 
 ## Commit & Pull Request Guidelines
 

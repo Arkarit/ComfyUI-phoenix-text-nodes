@@ -178,9 +178,23 @@ async function resolveToggles(node, definesIn) {
 	// The offsets must be the exact values the node's own execution will use,
 	// otherwise the pre-queue pass resolves against a different rng than the
 	// run that follows and a _NODE(...) tag can activate the wrong node.
-	// Both default to 0, which is the legacy single-stream path.
-	const seedOffset = widgetValue(node, "seed_offset") || 0;
-	const rowSeedStep = widgetValue(node, "row_seed_step") || 0;
+	// A node saved before the offsets existed has neither a widget nor an
+	// input for them, which means the legacy default of 0. A linked offset
+	// that can't be resolved must not fall back to 0, though: like an
+	// unresolvable seed, that would silently pick against a different rng.
+	const offsets = {};
+	for (const name of ["seed_offset", "row_seed_step"]) {
+		const value = widgetValue(node, name);
+		if (value === undefined && node.inputs?.some((i) => i.name === name && i.link != null)) {
+			console.warn(
+				`Phoenix Random CSV Text Replace "${node.title}": couldn't resolve a concrete ${name} value ahead of queuing (linked from something other than a plain widget or a single-widget passthrough node), can't resolve _NODE(...) tags before queuing.`
+			);
+			return null;
+		}
+		offsets[name] = value ?? 0;
+	}
+	const seedOffset = offsets.seed_offset;
+	const rowSeedStep = offsets.row_seed_step;
 	// INT widgets allow up to 2^64-1, but a JS number is a double, so values
 	// past 2^53 already lost precision when the workflow was parsed. Warn
 	// rather than silently resolve against a different seed.

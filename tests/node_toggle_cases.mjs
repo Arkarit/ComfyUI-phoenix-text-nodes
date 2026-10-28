@@ -66,6 +66,7 @@ export async function runTests(source) {
 	// DEFINE/IF/NODE tags that would independently activate the resolver.
 	let extension;
 	const requests = [];
+	const warnLog = [];
 	const sourceNode = { id: 1, mode: 0, type: "PhoenixRandomCSVTextReplace", inputs: [],
 		widgets: [{ name: "terms", value: "_IFNOT(See)_ walk" },
 			{ name: "seed", value: 0 }, { name: "unique", value: false }] };
@@ -76,7 +77,7 @@ export async function runTests(source) {
 		return { async json() { return { toggles: {}, defines: [] }; } };
 	} };
 	new Function("app", "api", "console", "performance", source.replace(/^import .*;\s*$/gm, ""))(
-		app, api, { debug() {}, warn() {} }, { now: () => 0 });
+		app, api, { debug() {}, warn(message) { warnLog.push(message); } }, { now: () => 0 });
 	await extension.setup();
 	await app.graphToPrompt();
 	equal(requests.length, 1);
@@ -128,15 +129,33 @@ export async function runTests(source) {
 
 	// A widget value past 2^53 can't be represented exactly as a JS number,
 	// so the pre-queue pass may resolve against a different seed than the run.
-	const warnLog = [];
 	const bigNode = { id: 5, mode: 0, type: "PhoenixRandomCSVTextReplace", inputs: [],
 		widgets: [{ name: "terms", value: "_NODE(Lora)_ a,b" },
 			{ name: "seed", value: 0 }, { name: "unique", value: false },
 			{ name: "seed_offset", value: 2 ** 63 }, { name: "row_seed_step", value: 0 }] };
 	app.graph = { _nodes: [bigNode] };
 	requests.length = 0;
+	warnLog.length = 0;
 	await app.graphToPrompt();
 	equal(requests.length, 1);
+	equal(warnLog.length, 1);
+
+	// A linked offset that can't be resolved to one concrete value must not
+	// fall back to 0; like an unresolvable seed, the node is skipped instead.
+	const unresolvedNode = { id: 6, mode: 0, type: "PhoenixRandomCSVTextReplace",
+		inputs: [{ name: "seed_offset", link: 60 }],
+		widgets: [{ name: "terms", value: "_NODE(Lora)_ a,b" },
+			{ name: "seed", value: 0 }, { name: "unique", value: false }] };
+	const unresolvedGraph = { links: { 60: { origin_id: 61, origin_slot: 0 } }, _nodes: [unresolvedNode],
+		setDirtyCanvas() {}, getNodeById(id) { return this._nodes.find((n) => n.id === id); } };
+	unresolvedNode.graph = unresolvedGraph;
+	unresolvedGraph._nodes.push({ id: 61, graph: unresolvedGraph, inputs: [],
+		widgets: [{ name: "a", value: 1 }, { name: "b", value: 2 }] });
+	app.graph = unresolvedGraph;
+	requests.length = 0;
+	warnLog.length = 0;
+	await app.graphToPrompt();
+	equal(requests.length, 0);
 	equal(warnLog.length, 1);
 
 	return checks;
