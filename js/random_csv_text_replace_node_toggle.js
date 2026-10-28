@@ -175,11 +175,35 @@ async function resolveToggles(node, definesIn) {
 		);
 		return null;
 	}
+	// The offsets must be the exact values the node's own execution will use,
+	// otherwise the pre-queue pass resolves against a different rng than the
+	// run that follows and a _NODE(...) tag can activate the wrong node.
+	// Both default to 0, which is the legacy single-stream path.
+	const seedOffset = widgetValue(node, "seed_offset") || 0;
+	const rowSeedStep = widgetValue(node, "row_seed_step") || 0;
+	// INT widgets allow up to 2^64-1, but a JS number is a double, so values
+	// past 2^53 already lost precision when the workflow was parsed. Warn
+	// rather than silently resolve against a different seed.
+	for (const [name, value] of [["seed", seed], ["seed_offset", seedOffset], ["row_seed_step", rowSeedStep]]) {
+		if (typeof value === "number" && value > Number.MAX_SAFE_INTEGER) {
+			console.warn(
+				`Phoenix Random CSV Text Replace "${node.title}": ${name} is ${value}, past 2^53, so the browser can't represent it exactly and the pre-queue resolution may not match the actual run.`
+			);
+		}
+	}
 	try {
 		const response = await api.fetchApi(ENDPOINT, {
 			method: "POST",
 			headers: { "Content-Type": "application/json" },
-			body: JSON.stringify({ terms, seed, unique, defines: definesIn, pass_through: passesThrough(node) }),
+			body: JSON.stringify({
+				terms,
+				seed,
+				unique,
+				defines: definesIn,
+				pass_through: passesThrough(node),
+				seed_offset: seedOffset,
+				row_seed_step: rowSeedStep,
+			}),
 		});
 		return await response.json();
 	} catch (err) {

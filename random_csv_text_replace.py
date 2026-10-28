@@ -362,7 +362,8 @@ def _join_continuation_lines(terms):
     return lines
 
 
-def _process_rows(terms, seed, unique, defines=None, pass_through_defines=True):
+def _process_rows(terms, seed, unique, defines=None, pass_through_defines=True,
+                  seed_offset=0, row_seed_step=0):
     """Parses terms and picks one candidate per row exactly like
     PhoenixRandomCSVTextReplace.replace() does, for rows that have
     candidates. Returns (rows, defined): a list of per-row dicts, and the
@@ -395,13 +396,28 @@ def _process_rows(terms, seed, unique, defines=None, pass_through_defines=True):
     _DEFINE(...)_ names are added to that set as rows are processed, so a
     later row in the same node already sees what an earlier row defined.
 
+    `seed_offset` shifts the starting seed (seed + seed_offset). With
+    `row_seed_step` = 0 the node keeps its single shared stream, so the
+    result is exactly what an unoffset run produced — the defaults are
+    byte-for-byte compatible with the previous behavior. With
+    `row_seed_step` > 0 each row gets its own seeded rng derived from
+    (seed + seed_offset + row_index * row_seed_step), where row_index is
+    the index of the row as processed (not the source line number), so a
+    row's pick no longer depends on how many draws earlier rows consumed.
+    That is what breaks the correlation between two nodes sharing one
+    seed, and it keeps a row stable when a comment/blank line is inserted
+    above it. A row that consumes no draw (a _NONE_ row, or one left with
+    nothing eligible by gating) still advances row_index, so later rows
+    keep their own slot.
+
     _IF/_IFNOT gating is exclusive: in a row where at least one candidate's
     condition is satisfied, ONLY the satisfied candidates can be picked;
     otherwise only candidates carrying neither _IF nor _IFNOT can. If
     that leaves nothing to pick, the row behaves like _NONE_ — its
     placeholder is removed but the row still occupies its index, so the
     placeholder numbering of every following row stays put."""
-    rng = random.Random(seed)
+    base_seed = seed + seed_offset
+    rng = random.Random(base_seed)
     defined = normalize_defines(defines)
     own_defines = frozenset()
     used = set()
@@ -415,6 +431,11 @@ def _process_rows(terms, seed, unique, defines=None, pass_through_defines=True):
         candidates = [f for f in fields if f != UNIQUE_KEYWORD]
         if not candidates:
             continue
+
+        # row_seed_step == 0 keeps the single shared stream, exactly as
+        # before; anything else gives this row its own rng at its own slot.
+        row_rng = rng if row_seed_step == 0 else random.Random(
+            base_seed + len(rows_out) * row_seed_step)
 
         parsed = [_parse_candidate(c) for c in candidates]
         pos_universe = sorted({name for p in parsed for name in p.node_names})
@@ -435,14 +456,14 @@ def _process_rows(terms, seed, unique, defines=None, pass_through_defines=True):
                 remaining = [p for p in pool if p.text not in used]
                 if remaining:
                     pool = remaining
-            choice = rng.choices(pool, weights=[p.weight for p in pool], k=1)[0]
+            choice = row_rng.choices(pool, weights=[p.weight for p in pool], k=1)[0]
             if row_unique:
                 used.add(choice.text)
             own_defines = own_defines | frozenset(choice.define_names)
             defined = defined | own_defines
 
         choice_text = _resolve_chance_placeholders(
-            choice.text if choice else "", choice.chance_specs if choice else [], rng
+            choice.text if choice else "", choice.chance_specs if choice else [], row_rng
         )
 
         rows_out.append({
@@ -457,7 +478,8 @@ def _process_rows(terms, seed, unique, defines=None, pass_through_defines=True):
     return rows_out, defined if pass_through_defines else own_defines
 
 
-def _resolve_node_toggles(terms, seed, unique, defines=None, pass_through_defines=True):
+def _resolve_node_toggles(terms, seed, unique, defines=None, pass_through_defines=True,
+                          seed_offset=0, row_seed_step=0):
     """Resolves which _NODE(name)_/_NOTNODE(name)_-tagged nodes should be
     active vs. bypassed for a run.
 
@@ -481,9 +503,14 @@ def _resolve_node_toggles(terms, seed, unique, defines=None, pass_through_define
     chained nodes can thread the resulting set into the next one — the
     /phoenix/random_csv_node_toggles endpoint does precisely that, since
     the pre-queue pass has to arrive at the same picks the Python run
-    will."""
+    will. `seed_offset` and `row_seed_step` must therefore be the same
+    values the node's own execution will use; if they differ, the toggles
+    resolve against a different rng than the run that follows, and a
+    _NODE(...)_ tag can activate the wrong node.
+    """
     state = {}
-    rows, defined = _process_rows(terms, seed, unique, defines, pass_through_defines)
+    rows, defined = _process_rows(terms, seed, unique, defines, pass_through_defines,
+                                  seed_offset, row_seed_step)
     for row in rows:
         chosen_pos = set(row["node_names"])
         chosen_neg = set(row["notnode_names"])
@@ -533,12 +560,17 @@ def _substitute_placeholders(text, search_string, start_index, terms):
 async def _random_csv_node_toggles_route(request):
     data = await request.json()
     incoming = normalize_defines(data.get("defines", []))
+    # The offsets have to match what the node's own execution will use,
+    # otherwise the pre-queue pass resolves against a different rng than
+    # the run that follows. Defaults keep the legacy single-stream path.
     state, defined = _resolve_node_toggles(
         data.get("terms", ""),
         int(data.get("seed", 0)),
         bool(data.get("unique", False)),
         incoming,
         pass_through_defines=bool(data.get("pass_through", True)),
+        seed_offset=int(data.get("seed_offset", 0)),
+        row_seed_step=int(data.get("row_seed_step", 0)),
     )
     return web.json_response({"toggles": state, "defines": sorted(defined)})
 
@@ -587,6 +619,20 @@ class PhoenixRandomCSVTextReplace:
     weight 1); the token is stripped from the term before use. E.g. for
     "red, _2_ green, _0.1_ blue", green comes up twice as often as red,
     and blue only a tenth as often as red.
+
+    seed_offset shifts the starting seed (seed + seed_offset), and
+    row_seed_step gives each row its own rng derived from
+    (seed + seed_offset + row_index * row_seed_step). Both default to 0,
+    which keeps the original single shared stream — an untouched node
+    picks exactly what it picked before. The correlation worth knowing
+    about: with one shared stream, two nodes given the same seed (e.g. a
+    global seed distributed through KJNodes' SetNode/GetNode) start in an
+    identical state, so rows with the same candidate structure pick the
+    same index every run. row_seed_step breaks that, and it also keeps a
+    row's pick stable when a comment or blank line is inserted above it,
+    because row_index counts processed rows rather than source lines.
+    Same seed + same terms + same offsets still always gives the same
+    result.
 
     A candidate may also carry any number of _NODE(nodename)_ tags (e.g.
     "_NODE(A)_ _NODE(B)_ red"), where nodename is the title of another
@@ -724,6 +770,29 @@ class PhoenixRandomCSVTextReplace:
                         "node defines itself."
                     ),
                 }),
+                "seed_offset": ("INT", {
+                    "default": 0,
+                    "min": 0,
+                    "max": 0xFFFFFFFFFFFFFFFF,
+                    "tooltip": (
+                        "Shifts the starting seed (seed + seed_offset). 0 keeps the original "
+                        "behavior. Use a different offset per node so two nodes sharing one "
+                        "global seed don't start in an identical state and pick the same term "
+                        "every run when their rows have the same candidate structure."
+                    ),
+                }),
+                "row_seed_step": ("INT", {
+                    "default": 0,
+                    "min": 0,
+                    "max": 0xFFFFFFFFFFFFFFFF,
+                    "tooltip": (
+                        "0 keeps the single shared rng stream (original behavior). Above 0, each "
+                        "row gets its own rng from (seed + seed_offset + row_index * row_seed_step), "
+                        "where row_index counts processed rows, not source lines — so a row's pick "
+                        "no longer depends on how many draws earlier rows consumed, and inserting a "
+                        "comment or blank line above a row doesn't change its pick."
+                    ),
+                }),
             },
         }
 
@@ -733,9 +802,11 @@ class PhoenixRandomCSVTextReplace:
     CATEGORY = "phoenix/text"
 
     def replace(self, text, search_string, start_index, terms, seed, unique=False,
-                preview="", defines=None, pass_through_defines=True):
+                preview="", defines=None, pass_through_defines=True,
+                seed_offset=0, row_seed_step=0):
         incoming = normalize_defines(defines)
-        rows, defined = _process_rows(terms, seed, unique, incoming, pass_through_defines)
+        rows, defined = _process_rows(terms, seed, unique, incoming, pass_through_defines,
+                                      seed_offset, row_seed_step)
         replaced = [row["text"] for row in rows]
         result = _substitute_placeholders(text, search_string, start_index, replaced)
         replaced_text = "\n".join(replaced)

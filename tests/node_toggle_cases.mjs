@@ -81,5 +81,63 @@ export async function runTests(source) {
 	await app.graphToPrompt();
 	equal(requests.length, 1);
 	equal(requests[0].terms, "_IFNOT(See)_ walk");
+
+	// The pre-queue pass has to resolve against the same rng the node's own
+	// execution will use, so the offsets must travel in the request body.
+	const offsetNode = { id: 2, mode: 0, type: "PhoenixRandomCSVTextReplace", inputs: [],
+		widgets: [{ name: "terms", value: "_NODE(Lora)_ a,b" },
+			{ name: "seed", value: 0 }, { name: "unique", value: false },
+			{ name: "seed_offset", value: 5 }, { name: "row_seed_step", value: 2 }] };
+	app.graph._nodes = [offsetNode];
+	requests.length = 0;
+	await app.graphToPrompt();
+	equal(requests.length, 1);
+	equal(requests[0].seed_offset, 5);
+	equal(requests[0].row_seed_step, 2);
+
+	// Nodes saved before the offsets existed have no such widgets at all;
+	// the request must still carry the legacy defaults rather than undefined.
+	const legacyNode = { id: 3, mode: 0, type: "PhoenixRandomCSVTextReplace", inputs: [],
+		widgets: [{ name: "terms", value: "_NODE(Lora)_ a,b" },
+			{ name: "seed", value: 0 }, { name: "unique", value: false }] };
+	app.graph._nodes = [legacyNode];
+	requests.length = 0;
+	await app.graphToPrompt();
+	equal(requests.length, 1);
+	equal(requests[0].seed_offset, 0);
+	equal(requests[0].row_seed_step, 0);
+
+	// Offsets read through a virtual pass-through node, like a linked seed.
+	const routedNode = { id: 4, mode: 0, type: "PhoenixRandomCSVTextReplace",
+		inputs: [{ name: "seed_offset", link: 40 }, { name: "row_seed_step", link: null }],
+		widgets: [{ name: "terms", value: "_NODE(Lora)_ a,b" },
+			{ name: "seed", value: 0 }, { name: "unique", value: false }] };
+	const routedGraph = { links: { 40: { origin_id: 41, origin_slot: 0 } }, _nodes: [routedNode],
+		setDirtyCanvas() {}, getNodeById(id) { return this._nodes.find((n) => n.id === id); } };
+	routedNode.graph = routedGraph;
+	routedGraph._nodes.push({ id: 41, isVirtualNode: true,
+		getInputLink: () => ({ origin_id: 42, origin_slot: 0 }) });
+	routedGraph._nodes.push({ id: 42, graph: routedGraph, inputs: [],
+		widgets: [{ name: "other", value: 7 }] });
+	app.graph = routedGraph;
+	requests.length = 0;
+	await app.graphToPrompt();
+	equal(requests.length, 1);
+	equal(requests[0].seed_offset, 7);
+	equal(requests[0].row_seed_step, 0);
+
+	// A widget value past 2^53 can't be represented exactly as a JS number,
+	// so the pre-queue pass may resolve against a different seed than the run.
+	const warnLog = [];
+	const bigNode = { id: 5, mode: 0, type: "PhoenixRandomCSVTextReplace", inputs: [],
+		widgets: [{ name: "terms", value: "_NODE(Lora)_ a,b" },
+			{ name: "seed", value: 0 }, { name: "unique", value: false },
+			{ name: "seed_offset", value: 2 ** 63 }, { name: "row_seed_step", value: 0 }] };
+	app.graph = { _nodes: [bigNode] };
+	requests.length = 0;
+	await app.graphToPrompt();
+	equal(requests.length, 1);
+	equal(warnLog.length, 1);
+
 	return checks;
 }
